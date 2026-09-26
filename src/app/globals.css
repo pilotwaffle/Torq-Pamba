@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+body {
+  font-family: "Avenir Next", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+}
+
+.display-serif {
+  font-family: "Iowan Old Style", Palatino, "Palatino Linotype", Georgia, serif;
+}
+
+::selection {
+  background: #a7f3d0;
+}
