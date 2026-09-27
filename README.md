@@ -7,8 +7,6 @@ Compliance-first AI UGC video studio: website-to-brief onboarding, avatars, chat
 
 ## Demo
 
-> **Media pending upload.** The screenshots and demo video below were captured from the real running app with the mock provider (`npm run capture && bash scripts/make-media.sh`), but they have not been uploaded to this repository yet: the tool used to publish the repo can only write text files. Until the PNG, GIF and MP4 files are pushed, the image and video links in this README will not render. You can regenerate them locally with the command above.
-
 [![Demo walkthrough](docs/media/demo.gif)](docs/media/demo.mp4)
 
 The clip is the same mock-provider journey as the screenshots: public site, signup, onboarding the built-in demo company, avatar, chat cost preview, approval, and the schedule queue. Open the MP4 from the GIF.
