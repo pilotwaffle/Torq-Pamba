@@ -145,7 +145,7 @@ sequenceDiagram
   Note over App,DB: POST /api/cron/tick or processDueItems sets due_manual. No platform is called.
 ```
 
-A shorter module map is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+A shorter module map, and how to add a feature through the extension points, is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Quickstart
 
@@ -276,7 +276,7 @@ All read 2026-09-26.
 
 ## Model router
 
-Tiers and chains live in `src/lib/pricing.ts` (`TIER_MODEL`, `FALLBACK_CHAIN`). The router walks the chain when a provider refuses or is unavailable, and it stores every attempt. The mock video provider refuses the first attempt when the prompt contains `[refuse]`, and every attempt when it contains `[refuse-all]`.
+Each model's tier and chain position live on its entry in `src/lib/models/<vendor>.ts`; `src/lib/pricing.ts` derives `TIER_MODEL` and `FALLBACK_CHAIN` from them. The router walks the chain when a provider refuses or is unavailable, and it stores every attempt. The mock video provider refuses the first attempt when the prompt contains `[refuse]`, and every attempt when it contains `[refuse-all]`.
 
 | Tier | Default model | List price | Fallback chain |
 |---|---|---|---|
@@ -334,14 +334,16 @@ Vercel or Railway is enough for this phase.
 
 ## Testing
 
-- Unit: `npm test`. Vitest, Node environment, in-memory PGlite. Covers pricing totals, the router and fallback, approval rules, the schedule transition to `due_manual`, billing’s refusal of live Stripe keys, onboarding fetch guards, and a source scan that fails if a forbidden publish endpoint appears under `src/`.
+- Unit: `npm test`. Vitest, Node environment, in-memory PGlite. Covers pricing totals, the router and fallback, approval rules, the schedule transition to `due_manual`, billing’s refusal of live Stripe keys, onboarding fetch guards, the v2 migration (no schema drift, workspace cascades, plan seeds), the model, provider, chat tool, and nav registries, the fail-closed cron and webhook endpoints, and a source scan that fails if a forbidden publish endpoint appears under `src/`.
 - Postgres: CI also runs Vitest against Postgres 16 with `DATABASE_URL` set, one file at a time, because `npm test` itself clears `DATABASE_URL`.
-- End to end: `npm run test:e2e`. Playwright drives Chromium through signup, the demo-site onboard, chat, approval, and the queue. The web server is a production build on port 3100 with `PROVIDER_MODE=mock`.
+- End to end: `npm run test:e2e`. Playwright drives Chromium through signup, the demo-site onboard, chat, approval, and the queue. The web server is a production build on port 3100 with `PROVIDER_MODE=mock`. Core specs are in `e2e/core/`; each feature adds `e2e/<feature>/` using the helpers in `e2e/support/`.
 - Capture: `npm run capture`, then `bash scripts/make-media.sh`, refreshes `docs/images/` and `docs/media/`.
 
 CI (`.github/workflows/ci.yml`) runs lint, typecheck, unit tests, the Playwright job, and the Postgres job on pushes to `main` and on pull requests. It installs Node 24.
 
 ## Roadmap
+
+The build order for v2 (foundation, then six features in parallel, then publishing, analytics, and the API) is in [docs/V2-PLAN.md](docs/V2-PLAN.md).
 
 From the research report, section 4E. Durations in that report’s timeline are prior estimates, except the approval lead times, which are the published figures in [docs/PHASE0-CHECKLIST.md](docs/PHASE0-CHECKLIST.md).
 

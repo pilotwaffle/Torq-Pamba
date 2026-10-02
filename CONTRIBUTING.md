@@ -44,18 +44,20 @@ Business rules live in `src/lib` so unit tests can call them without rendering a
 | `src/app/app/` | Signed-in studio: dashboard, onboarding, brief, avatars, chat, videos, schedule, billing, settings |
 | `src/app/api/billing/` | `POST /api/billing/checkout`, `POST /api/billing/webhook` |
 | `src/app/api/cron/tick/` | `POST /api/cron/tick` moves due rows to `due_manual` |
+| `src/components/app-shell/` | Sidebar nav entries and sidebar widgets as config arrays |
 | `src/components/` | Studio UI. Prefer accessible names (`label`, `role`) so Playwright can use `getByRole` and `getByLabel` |
-| `src/db/schema.ts` | Drizzle tables |
+| `src/db/schema/` | Drizzle tables, one file per domain, re-exported from `index.ts`. Enums in `enums.ts` |
 | `src/db/index.ts` | `getDb()`, memoized on `globalThis`, migrates once |
 | `src/lib/onboarding/` | Fetch, extract, brief, assets, rights |
-| `src/lib/agent/` | Intent parse, plan, chat turn |
+| `src/lib/agent/` | Chat tools (`tools/`, one file each, listed in `tools/all.ts`), plan, chat turn |
 | `src/lib/router.ts` | Budget check, parallel scenes, fallback, stitch, charge-on-success |
-| `src/lib/pricing.ts` | List prices, tiers, fallback chains, `estimateClipCost` |
-| `src/lib/providers/` | One adapter file per vendor, plus `mock.ts`, `live.ts`, `registry.ts` |
+| `src/lib/models/` | Per-model catalog, one file per vendor: list price and its source, tier, fallback position |
+| `src/lib/pricing.ts` | `TIER_MODEL`, `FALLBACK_CHAIN`, and `estimateClipCost`, derived from the catalog |
+| `src/lib/providers/` | One adapter file per vendor, listed in `adapters.ts`, plus `mock.ts`, `live.ts`, `catalog.ts`, `registry.ts` |
 | `src/lib/approval.ts` | Gate rules. Approve is impossible until the draft is complete |
 | `src/lib/schedule.ts` | Slots and `processDueItems`. No publish function |
 | `src/lib/billing.ts` | Plans and Stripe test mode |
-| `e2e/` | Playwright journey and capture |
+| `e2e/` | `support/` (steps, `account` fixture, journey), `core/` (journey, fallback, shell, capture), and one folder per feature |
 | `drizzle/` | Committed SQL migrations |
 | `scripts/` | `setup.mjs`, `migrate.ts`, `make-media.sh` |
 
@@ -89,10 +91,10 @@ interface VideoProvider {
 }
 ```
 
-1. Add `src/lib/providers/<vendor>.ts`. Build the request in a pure function the unit tests can call without the network. Put the live `fetch` behind `isLive(["YOUR_API_KEY"])` from `live.ts`. When that returns false, return `mockGenerateClip` (or `mockGenerateImage`).
+1. Add `src/lib/providers/<vendor>.ts`. Build the request in a pure function the unit tests can call without the network. Put the live `fetch` behind `isLive(["YOUR_API_KEY"])` from `live.ts`. When that returns false, return `mockGenerateClip` (or `mockGenerateImage`). For a catalog-priced video model, `catalogVideoProvider(id, { envKeys, live })` from `catalog.ts` does both.
 2. Map HTTP 400 and 422, and safety-filter responses, to `ProviderRefusedError`. Map other failures and timeouts to `ProviderUnavailableError`. The router treats both as “try the next model” and records the attempt.
-3. Register the object in `videoProviders`, `imageProviders`, or `llmProviders` in `registry.ts`.
-4. Add the list price to `src/lib/pricing.ts` with a comment that cites the vendor page and the date you read it. If the model belongs on a tier, add it to `VIDEO_USD_PER_SEC` and to `FALLBACK_CHAIN`. Do not invent a price.
+3. Export `adapter = defineAdapter({ id: "<vendor>", video: [...], image: [...], llm: [...] })` from the file and add one line to `adapters.ts`. Do not edit `registry.ts`.
+4. Add the model to `src/lib/models/<vendor>.ts` (and one line in `models/vendors.ts` for a new vendor) with `source` citing the vendor page and the date you read it. If the model belongs on a chain, give it `chains: { <tier>: <position> }`; a fractional position slots between existing models. Do not invent a price.
 5. Document the key in `.env.example` (empty value, one comment line) and in the environment table in `README.md`.
 6. Test the request builder, the price, and, if the id is on a chain, a refusal. The mock provider refuses when the prompt contains `[refuse]`. Do not hit the vendor from Vitest or Playwright.
 
@@ -118,6 +120,6 @@ Before you open a change:
 
 Add or extend a Vitest file next to the module when you change pricing, the router, approval, scheduling, billing, auth, or onboarding. The forbidden-endpoint scan in `src/lib/schedule.test.ts` must stay, and it must still fail the suite if those strings appear under `src/`.
 
-Run `npm run test:e2e` when you change a page, a form, or a flow the journey covers (signup, onboarding, chat, approval, schedule). If you change what a screenshot shows, regenerate with `npm run capture` and `bash scripts/make-media.sh`.
+Run `npm run test:e2e` when you change a page, a form, or a flow the journey covers (signup, onboarding, chat, approval, schedule). A new feature adds its own `e2e/<feature>/*.spec.ts` using `test` from `e2e/support`, rather than extending the core journey. If you change what a screenshot shows, regenerate with `npm run capture` and `bash scripts/make-media.sh`.
 
 If you add a migration, generate it with `npm run db:generate` and commit `./drizzle`. Do not hand-edit a snapshot to skip a column the schema declares.
