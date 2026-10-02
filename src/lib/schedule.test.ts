@@ -1,7 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { eq } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { POST as cronTick } from "@/app/api/cron/tick/route";
 import { getDb } from "@/db";
 import { auditLog, scheduleItems, videos, workspaces } from "@/db/schema";
@@ -192,15 +192,15 @@ describe("cron auth", () => {
     }
   });
 
-  it("allows the tick when CRON_SECRET is unset", async () => {
-    const previous = process.env.CRON_SECRET;
-    delete process.env.CRON_SECRET;
+  it("opens the tick without CRON_SECRET only in explicit local mode", async () => {
+    vi.stubEnv("CRON_SECRET", "");
+    vi.stubEnv("ALLOW_INSECURE_LOCAL_ENDPOINTS", "1");
     try {
       expect(cronAuthorized("Bearer anything")).toBe(true);
       const open = await cronTick(new Request("http://localhost/api/cron/tick", { method: "POST" }));
       expect(open.status).toBe(200);
     } finally {
-      await restoreEnv("CRON_SECRET", previous);
+      vi.unstubAllEnvs();
     }
   });
 });

@@ -1,8 +1,8 @@
 import { createHmac } from "node:crypto";
-import { KLING_AVATAR_USD_PER_SEC } from "@/lib/pricing";
-import { isLive, pollUntil, postJson, getJson } from "./live";
-import { mockGenerateClip } from "./mock";
-import { ProviderUnavailableError, type ClipRequest, type ClipResult, type VideoProvider } from "./types";
+import type { VideoModel } from "@/lib/models";
+import { catalogVideoProvider } from "./catalog";
+import { getJson, pollUntil, postJson } from "./live";
+import { defineAdapter, ProviderUnavailableError, type ClipRequest, type ClipResult } from "./types";
 
 const ROOT = "https://api.klingai.com/v1";
 
@@ -29,7 +29,7 @@ export function buildKlingAvatarRequest(req: ClipRequest) {
   };
 }
 
-async function liveClip(req: ClipRequest): Promise<ClipResult> {
+async function liveClip(req: ClipRequest, model: VideoModel): Promise<ClipResult> {
   const access = process.env.KLING_ACCESS_KEY?.trim() ?? "";
   const secret = process.env.KLING_SECRET_KEY?.trim() ?? "";
   const headers = { authorization: `Bearer ${klingBearerToken(access, secret)}` };
@@ -53,19 +53,13 @@ async function liveClip(req: ClipRequest): Promise<ClipResult> {
     providerId: "kling-avatar",
     durationS: req.durationS,
     frameUrls: [],
-    costUsd: KLING_AVATAR_USD_PER_SEC * req.durationS,
+    costUsd: model.usdPerSecond * req.durationS,
   };
 }
 
-export const klingAvatar: VideoProvider = {
-  id: "kling-avatar",
-  vendor: "kling",
-  label: "Kling Avatar",
-  tier: "budget",
-  pricePerSecondUsd: KLING_AVATAR_USD_PER_SEC,
-  maxDurationS: 60,
-  async generateClip(req) {
-    if (isLive(["KLING_ACCESS_KEY", "KLING_SECRET_KEY"])) return liveClip(req);
-    return mockGenerateClip(this.id, this.pricePerSecondUsd, req);
-  },
-};
+export const klingAvatar = catalogVideoProvider("kling-avatar", {
+  envKeys: ["KLING_ACCESS_KEY", "KLING_SECRET_KEY"],
+  live: liveClip,
+});
+
+export const adapter = defineAdapter({ id: "kling", video: [klingAvatar] });

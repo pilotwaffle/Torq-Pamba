@@ -1,4 +1,4 @@
-import type { Tier } from "@/lib/pricing";
+import type { Tier } from "@/lib/models";
 
 export type ClipRequest = {
   prompt: string;
@@ -50,6 +50,30 @@ export interface LlmProvider {
   vendor: string;
   label: string;
   complete(req: { system: string; user: string }): Promise<string>;
+}
+
+/**
+ * Capabilities an adapter can register. A feature adds a kind (voice, lipsync,
+ * stitch, ...) by declaration merging from its own file:
+ *
+ *   declare module "@/lib/providers/types" {
+ *     interface ProviderKinds { voice: VoiceProvider }
+ *   }
+ *
+ * Every kind's provider needs a unique `id` within that kind.
+ */
+export interface ProviderKinds {
+  video: VideoProvider;
+  image: ImageProvider;
+  llm: LlmProvider;
+}
+
+export type ProviderKind = keyof ProviderKinds;
+
+export type ProviderAdapter = { id: string } & { [K in ProviderKind]?: readonly ProviderKinds[K][] };
+
+export function defineAdapter<const A extends ProviderAdapter>(adapter: A): A {
+  return adapter;
 }
 
 export class ProviderRefusedError extends Error {

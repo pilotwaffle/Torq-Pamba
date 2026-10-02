@@ -1,7 +1,7 @@
-import { SEEDANCE_2_RUNWAY_USD_PER_SEC } from "@/lib/pricing";
-import { isLive, pollUntil, postJson, getJson } from "./live";
-import { mockGenerateClip } from "./mock";
-import { ProviderUnavailableError, type ClipRequest, type ClipResult, type VideoProvider } from "./types";
+import type { VideoModel } from "@/lib/models";
+import { catalogVideoProvider } from "./catalog";
+import { getJson, pollUntil, postJson } from "./live";
+import { defineAdapter, ProviderUnavailableError, type ClipRequest, type ClipResult } from "./types";
 
 const ROOT = "https://api.dev.runwayml.com/v1";
 
@@ -15,7 +15,7 @@ export function buildRunwayRequest(req: ClipRequest) {
   };
 }
 
-async function liveClip(req: ClipRequest): Promise<ClipResult> {
+async function liveClip(req: ClipRequest, model: VideoModel): Promise<ClipResult> {
   const key = process.env.RUNWAY_API_KEY?.trim() ?? "";
   const headers = { authorization: `Bearer ${key}`, "x-runway-version": "2024-11-06" };
   const created = (await postJson("seedance-2-runway", `${ROOT}/image_to_video`, buildRunwayRequest(req), headers)) as {
@@ -34,19 +34,10 @@ async function liveClip(req: ClipRequest): Promise<ClipResult> {
     providerId: "seedance-2-runway",
     durationS: req.durationS,
     frameUrls: [],
-    costUsd: SEEDANCE_2_RUNWAY_USD_PER_SEC * req.durationS,
+    costUsd: model.usdPerSecond * req.durationS,
   };
 }
 
-export const seedanceRunway: VideoProvider = {
-  id: "seedance-2-runway",
-  vendor: "runway",
-  label: "Seedance 2.0 via Runway",
-  tier: "premium",
-  pricePerSecondUsd: SEEDANCE_2_RUNWAY_USD_PER_SEC,
-  maxDurationS: 60,
-  async generateClip(req) {
-    if (isLive(["RUNWAY_API_KEY"])) return liveClip(req);
-    return mockGenerateClip(this.id, this.pricePerSecondUsd, req);
-  },
-};
+export const seedanceRunway = catalogVideoProvider("seedance-2-runway", { envKeys: ["RUNWAY_API_KEY"], live: liveClip });
+
+export const adapter = defineAdapter({ id: "runway", video: [seedanceRunway] });

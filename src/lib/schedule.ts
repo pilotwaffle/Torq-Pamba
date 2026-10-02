@@ -3,6 +3,7 @@ import { and, asc, desc, eq, lte, ne } from "drizzle-orm";
 import { getDb } from "@/db";
 import { scheduleItems, videos, workspaces } from "@/db/schema";
 import { writeAudit } from "@/lib/audit";
+import { allowsInsecureLocalEndpoints } from "@/lib/local-mode";
 import { addCalendarDays, validZone, zonedParts, zonedToUtc } from "@/lib/time";
 
 export const SLOT_HOURS = [9, 12, 18] as const;
@@ -263,10 +264,10 @@ function tokenMatches(got: string, expected: string): boolean {
   return timingSafeEqual(left, right);
 }
 
-/** When CRON_SECRET is unset, the tick is open. When set, require `Bearer <secret>`. */
+/** Require `Bearer <CRON_SECRET>`. With no secret, only explicit local mode is let through. */
 export function cronAuthorized(authorization: string | null, secret = process.env.CRON_SECRET): boolean {
   const expected = secret?.trim() ?? "";
-  if (!expected) return true;
+  if (!expected) return allowsInsecureLocalEndpoints();
   const match = /^Bearer\s+(\S+)\s*$/i.exec(authorization?.trim() ?? "");
   if (!match?.[1]) return false;
   return tokenMatches(match[1], expected);

@@ -1,6 +1,6 @@
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { AppNav } from "@/components/app-nav";
-import { planLabel } from "@/components/ui";
+import { sortedSidebarWidgets } from "@/components/app-shell/sidebar.config";
 import { logoutAction } from "@/lib/auth/actions";
 import { requireWorkspace } from "@/lib/auth/guards";
 
@@ -15,9 +15,9 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         <div className="px-4 py-5">
           <div className="text-sm font-semibold tracking-wide">Torq-Pamba</div>
           <div className="mt-2 truncate text-sm text-zinc-100">{workspace.name}</div>
-          <span className="mt-2 inline-flex rounded-full bg-emerald-400/15 px-2 py-0.5 text-[11px] font-medium tracking-wide text-emerald-200 uppercase">
-            {planLabel(workspace.plan)}
-          </span>
+          {sortedSidebarWidgets().map((widget) => (
+            <Fragment key={widget.id}>{widget.render({ workspace })}</Fragment>
+          ))}
         </div>
         <AppNav />
         <form action={logoutAction} className="border-t border-zinc-800 p-3">

@@ -1,6 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { test } from "@playwright/test";
-import { runMockJourney } from "./journey";
+import { runMockJourney } from "../support";
 
 test.use({
   viewport: { width: 1280, height: 800 },
