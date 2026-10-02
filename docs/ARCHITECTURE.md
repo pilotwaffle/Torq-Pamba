@@ -101,3 +101,12 @@ Each extension point is a list that a feature adds one entry to, so parallel bra
 | An e2e spec | Add `e2e/<feature>/*.spec.ts`. Import `test` and `expect` from `e2e/support`; the `account` fixture signs up a fresh workspace, so specs never share data. Reuse steps from `e2e/support/steps.ts` (`completeOnboarding`, `planVideo`, `generateAndReview`, `approveAndSchedule`) instead of copying them. Change `e2e/core/` only when the core journey itself changes | `CI=1 npm run test:e2e` |
 
 When two branches append to the same list, the merge conflict is two adjacent added lines; keep both. Keep mock mode working with no keys: anything that calls a vendor goes behind `isLive`, and anything that charges credits must record nothing on failure.
+
+## Phase 3 additions (reach engine)
+
+- `src/lib/reach/hooks.ts`: hook patterns (question, POV, number, contrarian, social proof, before/after, curiosity), a policy filter for claims platforms reject, and `generateHookVariants` (control A plus re-hooked variants, proven patterns first).
+- Tables live in `src/db/schema/reach.ts` (migration `0003_phase3_reach`).
+- `src/lib/reach/experiments.ts`: `hook_experiments` and `hook_variants`. A variant is a new `videos` row that reuses the base clips with a new hook (on screen for the first 2 s), costs $0, and needs approval (the user can apply the base approval to all variants explicitly). Launch enqueues one Instagram `trial_reel` publish job per variant; `pickWinner` ranks by views or engagement once every variant has `min_views`; the decision writes a `knowledge_tiles` row (source `experiment`).
+- `src/lib/reach/knowledge.ts`: Knowledge tiles. `provenHooks` feeds `buildPlan` through the `plan` chat tool (`src/lib/agent/tools/plan.ts`; the plan leads with the best proven hook) and the next hook test.
+- `src/lib/reach/handoff.ts`: `ad_handoffs` for TikTok Spark Ads (sealed authorization code) and Meta partnership ads. No marketing-API calls; a source scan test enforces that.
+- `src/lib/reach/creators.ts`: `creator_briefs` with Markdown (TikTok One) and CSV (Billo / Collabstr) export at `GET /api/reach/briefs/<id>?format=md|csv` (session required).

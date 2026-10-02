@@ -1,6 +1,10 @@
+import { randomBytes } from "node:crypto";
 import { defineConfig } from "@playwright/test";
 
 const ci = !!process.env.CI;
+// The e2e server runs NODE_ENV=production, where sealing tokens and codes needs a key.
+// A fresh random key per run keeps any real key out of the tree.
+const e2eTokenKey = randomBytes(32).toString("hex");
 
 export default defineConfig({
   testDir: "e2e",
@@ -32,6 +36,7 @@ export default defineConfig({
       PGLITE_DIR: "./.data/e2e-pglite",
       PROVIDER_MODE: "mock",
       ALLOW_LOCAL_ONBOARDING: "1",
+      TOKEN_ENCRYPTION_KEY: e2eTokenKey,
     },
   },
 });

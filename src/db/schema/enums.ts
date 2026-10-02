@@ -100,3 +100,10 @@ export const publishJobStatus = pgEnum("publish_job_status", ["queued", "process
 export const publishStatus = pgEnum("publish_status", ["pending", "submitted", "published", "failed", "canceled"]);
 export const knowledgeKind = pgEnum("knowledge_kind", ["brand_fact", "preference", "learning", "hook_result", "rule"]);
 export const knowledgeSource = pgEnum("knowledge_source", ["user", "agent", "analytics"]);
+
+// Phase 3 reach engine (ported from feat/phase2-plus). `knowledge_tile_kind` is
+// separate from the foundation's `knowledge_kind` because the values differ.
+export const experimentStatus = pgEnum("experiment_status", ["draft", "running", "decided", "canceled"]);
+export const knowledgeTileKind = pgEnum("knowledge_tile_kind", ["hook", "angle", "audience", "format", "insight"]);
+export const adHandoffKind = pgEnum("ad_handoff_kind", ["tiktok_spark", "meta_partnership"]);
+export const adHandoffStatus = pgEnum("ad_handoff_status", ["awaiting_creator", "ready", "revoked"]);

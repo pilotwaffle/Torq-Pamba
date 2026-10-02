@@ -2,6 +2,7 @@ import { z } from "zod";
 import { buildPlan, type VideoPlan } from "@/lib/agent/plan";
 import { listWorkspaceAvatars } from "@/lib/avatars/store";
 import { completeLive } from "@/lib/providers/llm";
+import { provenHooks } from "@/lib/reach/knowledge";
 import { defineTool } from "./types";
 
 const DURATION = String.raw`(\d+)\s*(?:s|sec|secs|seconds?)\b`;
@@ -21,7 +22,10 @@ export const planTool = defineTool({
   async run(ctx, args) {
     const avatars = await listWorkspaceAvatars(ctx.workspace.id);
     const avatar = avatars.find((item) => item.isDefault) ?? avatars[0] ?? null;
+    // Phase 3: a hook that won a test (Knowledge) leads the plan's hook choices.
+    const proven = await provenHooks(ctx.workspace.id).catch(() => ({ hooks: [] as string[], patterns: [] as string[] }));
     const plan = buildPlan({
+      provenHooks: proven.hooks,
       topic: args.topic,
       count: args.count,
       durationS: args.durationS,

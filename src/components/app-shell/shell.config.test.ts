@@ -26,6 +26,9 @@ describe("app shell config", () => {
       "Schedule",
       "Accounts",
       "Analytics",
+      "Reach",
+      "Knowledge",
+      "Creators",
       "Billing",
       "Settings",
     ]);
