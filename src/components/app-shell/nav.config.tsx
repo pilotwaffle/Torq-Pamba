@@ -80,6 +80,17 @@ export const NAV_ITEMS: readonly NavItem[] = [
     ),
   },
   {
+    href: "/app/research",
+    label: "Research",
+    order: 450,
+    icon: (
+      <Icon>
+        <circle cx="11" cy="11" r="6" />
+        <path d="m20 20-4.5-4.5M8.5 11.5l2-2 1.5 1.5 2.5-2.5" />
+      </Icon>
+    ),
+  },
+  {
     href: "/app/chat",
     label: "Chat",
     order: 500,

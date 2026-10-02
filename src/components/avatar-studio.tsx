@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useFormStatus } from "react-dom";
 import { previewAvatarAction, useGeneratedAvatarAction, useStockAvatarAction } from "@/lib/avatars/actions";
 import { shortlist, STOCK_AVATARS, voiceLabel, type StockAvatar } from "@/lib/avatars/catalog";
@@ -32,10 +32,13 @@ export function AvatarStudio({
   niche,
   saved,
   returnTo,
+  avatarExtras,
 }: {
   niche: string;
   saved: StudioAvatar[];
   returnTo: string;
+  /** Replaces the voice line on a saved avatar's card, keyed by avatar id. */
+  avatarExtras?: Record<string, ReactNode>;
 }) {
   const matched = shortlist(niche);
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -61,7 +64,7 @@ export function AvatarStudio({
                 <p className="mt-2 font-medium">{avatar.name}</p>
                 {avatar.isDefault ? <p className="text-sm text-zinc-700">Default</p> : null}
                 <p className="text-sm text-zinc-600">{avatar.look}</p>
-                <p className="text-sm text-zinc-600">Voice: {voiceLabel(avatar.voiceId)}</p>
+                {avatarExtras?.[avatar.id] ?? <p className="text-sm text-zinc-600">Voice: {voiceLabel(avatar.voiceId)}</p>}
                 <SceneRow scenes={avatar.scenes} />
               </li>
             ))}

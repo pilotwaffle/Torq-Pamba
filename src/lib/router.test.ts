@@ -5,10 +5,10 @@ import { generationAttempts, videos, workspaces } from "@/db/schema";
 import { signupAccount } from "@/lib/auth/account";
 import { monthlySpendUsd } from "@/lib/budget";
 import { omniFlash } from "@/lib/providers/google";
-import { mockGenerateClip, resetMockRefusals } from "@/lib/providers/mock";
-import { ProviderRefusedError, type VideoProvider } from "@/lib/providers/types";
+import { mockPollClip, mockSubmitClip, resetMockRefusals } from "@/lib/providers/mock";
+import { ProviderRefusedError } from "@/lib/providers/types";
 import { roundCents, type Tier } from "@/lib/pricing";
-import { BudgetExceededError, FALLBACK_CHAIN, generateScenes, generateVideo, stitch } from "@/lib/router";
+import { BudgetExceededError, FALLBACK_CHAIN, generateVideo, stitch } from "@/lib/router";
 
 const password = "correct-horse-battery";
 
@@ -29,13 +29,18 @@ beforeEach(() => {
 });
 
 describe("mock provider", () => {
-  it("refuses once when the prompt contains [refuse], then returns an SVG frame", async () => {
-    const req = { prompt: "cold brew [refuse]", durationS: 5, sceneId: "scene-a" };
-    await expect(mockGenerateClip("omni-flash", 0.1, req)).rejects.toBeInstanceOf(ProviderRefusedError);
-    const ok = await mockGenerateClip("veo-3.1-lite", 0.05, req);
-    expect(ok.frameUrls[0]).toMatch(/^data:image\/svg\+xml/);
-    expect(ok.frameUrls[0]).not.toMatch(/watermark|torq-pamba/i);
-    const svg = decodeURIComponent(ok.frameUrls[0]!.slice(ok.frameUrls[0]!.indexOf(",") + 1));
+  it("refuses once when the prompt contains [refuse], then returns a real mp4 and its SVG frame", async () => {
+    const req = { prompt: "cold brew [refuse]", durationS: 2, sceneId: "scene-a", sceneIndex: 1 };
+    await expect(mockSubmitClip("omni-flash", req)).rejects.toBeInstanceOf(ProviderRefusedError);
+    const job = await mockSubmitClip("veo-3.1-lite", req);
+    expect(job.providerJobId).toMatch(/^mock:veo-3\.1-lite:/);
+    const done = await mockPollClip("veo-3.1-lite", req);
+    if (done.state !== "succeeded" || done.output.kind !== "bytes") throw new Error("expected bytes");
+    expect(done.output.mimeType).toBe("video/mp4");
+    expect(Buffer.from(done.output.bytes).subarray(4, 8).toString("latin1")).toBe("ftyp");
+    expect(done.frameUrl).toMatch(/^data:image\/svg\+xml/);
+    expect(done.frameUrl).not.toMatch(/watermark|torq-pamba/i);
+    const svg = decodeURIComponent(done.frameUrl!.slice(done.frameUrl!.indexOf(",") + 1));
     expect(svg).toContain('viewBox="0 0 360 640"');
     expect(svg).toMatch(/Scene \d · veo-3\.1-lite/);
     expect(svg).not.toContain("cold brew");
@@ -44,38 +49,10 @@ describe("mock provider", () => {
   it("does not call the network in mock mode", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    await omniFlash.generateClip({ prompt: "hello", durationS: 4, sceneId: "net" });
+    const job = await omniFlash.submitClip({ prompt: "hello", durationS: 4, sceneId: "net" });
+    await omniFlash.pollClip(job.providerJobId, { prompt: "hello", durationS: 4, sceneId: "net" });
     expect(fetchMock).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
-  });
-});
-
-describe("generateScenes", () => {
-  it("runs every scene at once", async () => {
-    let current = 0;
-    let max = 0;
-    const slow: VideoProvider = {
-      id: "slow",
-      vendor: "test",
-      label: "Slow",
-      tier: "standard",
-      pricePerSecondUsd: 0,
-      maxDurationS: 60,
-      async generateClip() {
-        current += 1;
-        max = Math.max(max, current);
-        await new Promise((resolve) => setTimeout(resolve, 40));
-        current -= 1;
-        return { providerId: "slow", durationS: 1, frameUrls: ["data:image/svg+xml,x"], costUsd: 0 };
-      },
-    };
-    const result = await generateScenes({
-      chain: ["slow"],
-      scenes: ["a", "b", "c"].map((id) => ({ id, prompt: id, durationS: 1 })),
-      resolve: () => slow,
-    });
-    expect(result.ok).toBe(true);
-    expect(max).toBe(3);
   });
 });
 

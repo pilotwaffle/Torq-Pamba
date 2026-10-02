@@ -1,43 +1,56 @@
 import { and, asc, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { chatMessages, type Workspace } from "@/db/schema";
+import {
+  currentConversation,
+  getConversation,
+  rejectOpenConfirmations,
+  touchConversation,
+} from "@/lib/agent/conversation";
+import type { EmitAgentEvent } from "@/lib/agent/events";
+import { runAgentSteps } from "@/lib/agent/loop";
+import { resolveAgentModel, type AgentModel } from "@/lib/agent/model";
 import { isVideoPlan } from "@/lib/agent/plan";
-import { chatTools, type ChatToolContext } from "@/lib/agent/tools/registry";
 import type { Tier } from "@/lib/pricing";
 import { BudgetExceededError, generateVideo } from "@/lib/router";
 
 const TIERS = new Set<Tier>(["budget", "standard", "premium"]);
 
-const FALLBACK =
-  "I can plan a video (“make a 30s video about …”), schedule an approved video, or tell you what’s scheduled.";
-
+/**
+ * One chat turn: store the user's message in the conversation, then run the
+ * agent loop. The model is Claude when live and keyed, otherwise the keyless
+ * matcher (see `resolveAgentModel`).
+ */
 export async function handleUserMessage(input: {
   workspace: Workspace;
   userId: string;
   text: string;
-}): Promise<void> {
+  conversationId?: string;
+  model?: AgentModel;
+  emit?: EmitAgentEvent;
+}): Promise<{ conversationId: string; paused: boolean } | null> {
   const content = input.text.trim().slice(0, 2000);
-  if (!content) return;
+  if (!content) return null;
+  const emit = input.emit ?? (() => {});
+  const model = input.model ?? resolveAgentModel();
+  const conversation =
+    (input.conversationId ? await getConversation(input.workspace.id, input.conversationId) : null) ??
+    (await currentConversation(input.workspace.id, input.userId));
+
   const db = await getDb();
   await db.insert(chatMessages).values({
     workspaceId: input.workspace.id,
     userId: input.userId,
+    conversationId: conversation.id,
     role: "user",
     content,
   });
+  await rejectOpenConfirmations(input.workspace.id, conversation.id);
+  await touchConversation(conversation, { model: model.id, firstText: content });
+  emit({ type: "turn", conversationId: conversation.id, model: model.id });
 
-  const ctx: ChatToolContext = {
-    workspace: input.workspace,
-    userId: input.userId,
-    text: content,
-    reply: (message, data) => insertAssistant(input.workspace.id, input.userId, message, data),
-  };
-  const found = chatTools.match(content);
-  if (found) {
-    await found.tool.run(ctx, found.args);
-    return;
-  }
-  await ctx.reply(FALLBACK, { kind: "note" });
+  const { paused } = await runAgentSteps({ workspace: input.workspace, userId: input.userId, conversation, model, emit });
+  return { conversationId: conversation.id, paused };
 }
 
 export async function generateFromMessage(input: {
@@ -46,6 +59,8 @@ export async function generateFromMessage(input: {
   messageId: string;
   tier: Tier;
   hookIndex: number;
+  /** Posts the finished message. Defaults to a new assistant message in the plan's conversation. */
+  reply?: (content: string, data: Record<string, unknown>) => Promise<void>;
 }): Promise<{ ok: true; videoId: string } | { ok: false; error: string }> {
   const db = await getDb();
   const [message] = await db
@@ -70,6 +85,8 @@ export async function generateFromMessage(input: {
       hook,
       voiceLines: plan.scenes.map((scene) => scene.line),
       scenes: plan.scenes,
+      notifyUserId: input.userId,
+      notifyConversationId: message.conversationId,
     });
   } catch (error) {
     if (error instanceof BudgetExceededError) return { ok: false, error: error.message };
@@ -79,9 +96,27 @@ export async function generateFromMessage(input: {
 
   await db
     .update(chatMessages)
-    .set({ data: { kind: "plan", plan: { ...plan, tier: input.tier }, generatedVideoId: result.videoId } })
+    .set({ data: { ...data, kind: "plan", plan: { ...plan, tier: input.tier }, generatedVideoId: result.videoId } })
     .where(eq(chatMessages.id, message.id));
-  await insertAssistant(input.workspaceId, input.userId, "The clip finished generating.", {
+  const post = async (content: string, posted: Record<string, unknown>) => {
+    if (input.reply) {
+      await input.reply(content, posted);
+      return;
+    }
+    await db.insert(chatMessages).values({
+      workspaceId: input.workspaceId,
+      userId: input.userId,
+      conversationId: message.conversationId,
+      role: "assistant",
+      content,
+      data: posted,
+    });
+  };
+  if (result.pending) {
+    await post("The clip is still generating. I'll post here when the final video is ready.", { kind: "note" });
+    return { ok: true, videoId: result.videoId };
+  }
+  await post("The clip finished generating.", {
     kind: "ready",
     videoId: result.videoId,
     attemptSummary: result.attemptSummary,
@@ -89,22 +124,7 @@ export async function generateFromMessage(input: {
   return { ok: true, videoId: result.videoId };
 }
 
-async function insertAssistant(
-  workspaceId: string,
-  userId: string,
-  content: string,
-  data: Record<string, unknown>,
-) {
-  const db = await getDb();
-  await db.insert(chatMessages).values({
-    workspaceId,
-    userId,
-    role: "assistant",
-    content,
-    data,
-  });
-}
-
+/** Every message in the workspace, oldest first, across conversations. */
 export async function listChat(workspaceId: string) {
   const db = await getDb();
   return db

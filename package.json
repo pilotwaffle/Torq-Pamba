@@ -15,6 +15,7 @@
     "capture": "CAPTURE=1 playwright test e2e/core/capture.spec.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx scripts/migrate.ts",
+    "worker": "tsx scripts/worker.ts",
     "setup": "node scripts/setup.mjs"
   },
   "dependencies": {

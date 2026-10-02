@@ -31,7 +31,22 @@ function context(): ChatToolContext & { replies: string[] } {
 
 describe("chat tool registry", () => {
   it("ships plan, schedule and list-schedule in priority order", () => {
-    expect(chatTools.tools.map((tool) => tool.name)).toEqual(["list-schedule", "schedule", "plan"]);
+    const core = new Set(["list-schedule", "schedule", "plan"]);
+    expect(chatTools.tools.map((tool) => tool.name).filter((name) => core.has(name))).toEqual([
+      "list-schedule",
+      "schedule",
+      "plan",
+    ]);
+  });
+
+  // One entry per wave 1 feature that ships chat tools; each keeps its own tools registered.
+  it.each([
+    ["voices", ["choose-voice", "clone-voice"]],
+    ["editor", ["regenerate-scene"]],
+    ["research", ["find-trends", "ideas"]],
+    ["credits", ["credit-balance"]],
+  ])("ships the %s chat tools", (_feature, names) => {
+    expect(chatTools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(names));
   });
 
   it("plugs in a new tool without touching the others", async () => {

@@ -21,6 +21,7 @@ describe("app shell config", () => {
       "Onboarding",
       "Brand brief",
       "Avatars",
+      "Research",
       "Chat",
       "Videos",
       "Schedule",
@@ -48,7 +49,7 @@ describe("app shell config", () => {
       ...SIDEBAR_WIDGETS,
       { id: "credits", order: 50, render: () => "1,600 credits" },
     ]);
-    expect(widgets.map((widget) => widget.id)).toEqual(["credits", "plan"]);
+    expect(widgets.map((widget) => widget.id)).toEqual(["credits", "plan", "credit-balance"]);
     expect(widgets[0]?.render({ workspace: {} as Workspace })).toBe("1,600 credits");
     expect(SIDEBAR_WIDGETS.find((widget) => widget.id === "plan")?.render({ workspace: { plan: "creator" } as Workspace })).toBeTruthy();
   });

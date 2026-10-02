@@ -1,22 +1,26 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getDb } from "@/db";
-import { avatars, generationAttempts, videos, workspaces } from "@/db/schema";
+import { avatars, videos, workspaces } from "@/db/schema";
 import { remainingBudgetUsd } from "@/lib/budget";
-import {
-  estimateClipCost,
-  FALLBACK_CHAIN,
-  formatUsd,
-  TIER_MODEL,
-  videoUsdPerSecond,
-  type Tier,
-} from "@/lib/pricing";
-import { videoProvider } from "@/lib/providers/registry";
-import {
-  ProviderRefusedError,
-  type VideoProvider,
-} from "@/lib/providers/types";
+import { attachChargeVideo, holdCredits, releaseCredits } from "@/lib/credits/charges";
+import { quoteClipCredits } from "@/lib/credits/pricing";
+import { enqueueClipJob } from "@/lib/jobs/clips";
+import { inlineWaitMs } from "@/lib/jobs/config";
+import { attemptSummaryForVideo, type GenerationPlan } from "@/lib/jobs/settle";
+import { driveVideo } from "@/lib/jobs/worker";
+import { estimateClipCost, FALLBACK_CHAIN, formatUsd, TIER_MODEL, type Tier } from "@/lib/pricing";
 
 export { FALLBACK_CHAIN, TIER_MODEL };
+export {
+  chargeForScenes,
+  formatAttempts,
+  parseManifest,
+  stitch,
+  type AttemptRecord,
+  type AttemptStatus,
+  type GeneratedScene,
+  type StitchedManifest,
+} from "@/lib/jobs/manifest";
 export const DEFAULT_TIER: Tier = "standard";
 export const DEFAULT_MODEL = TIER_MODEL.standard;
 
@@ -34,196 +38,19 @@ export class BudgetExceededError extends Error {
   }
 }
 
-export type AttemptStatus = "ok" | "refused" | "error";
+export type GenerateVideoResult =
+  | { ok: true; videoId: string; attemptSummary: string | null; pending?: false }
+  /** The jobs are still running; the cron tick or worker finishes them and posts to chat. */
+  | { ok: true; videoId: string; attemptSummary: null; pending: true }
+  | { ok: false; error: string };
 
-export type AttemptRecord = {
-  sceneIndex: number;
-  step: number;
-  provider: string;
-  status: AttemptStatus;
-  detail?: Record<string, unknown>;
-};
-
-export type GeneratedScene = {
-  index: number;
-  visual: string;
-  line: string;
-  durationS: number;
-  model: string;
-  frameUrl: string;
-};
-
-export type StitchedManifest = {
-  aiGenerated: boolean;
-  hook: string;
-  totalDurationS: number;
-  scenes: GeneratedScene[];
-  captions: { text: string; startS: number; endS: number }[];
-};
-
-type SceneRun = {
-  ok: boolean;
-  model: string;
-  frameUrl: string;
-  attempts: AttemptRecord[];
-};
-
-export function parseManifest(value: unknown): StitchedManifest | null {
-  if (!value || typeof value !== "object") return null;
-  const record = value as Partial<StitchedManifest>;
-  if (typeof record.hook !== "string" || typeof record.totalDurationS !== "number") return null;
-  if (!Array.isArray(record.scenes) || !Array.isArray(record.captions)) return null;
-  return {
-    aiGenerated: record.aiGenerated !== false,
-    hook: record.hook,
-    totalDurationS: record.totalDurationS,
-    scenes: record.scenes as GeneratedScene[],
-    captions: record.captions as StitchedManifest["captions"],
-  };
-}
-
-export function stitch(input: { hook: string; scenes: Omit<GeneratedScene, "index">[] }): StitchedManifest {
-  let cursor = 0;
-  const scenes = input.scenes.map((scene, index) => ({ ...scene, index }));
-  const captions = scenes.map((scene) => {
-    const startS = cursor;
-    cursor += scene.durationS;
-    return { text: scene.line, startS, endS: roundDuration(cursor) };
-  });
-  return {
-    aiGenerated: true,
-    hook: input.hook,
-    totalDurationS: roundDuration(cursor),
-    scenes,
-    captions,
-  };
-}
-
-function roundDuration(value: number): number {
-  return Math.round(value * 1000) / 1000;
-}
-
-export function formatAttempts(attempts: AttemptRecord[]): string | null {
-  if (!attempts.some((attempt) => attempt.status !== "ok")) return null;
-  const byScene = new Map<number, AttemptRecord[]>();
-  for (const attempt of attempts) {
-    const list = byScene.get(attempt.sceneIndex) ?? [];
-    list.push(attempt);
-    byScene.set(attempt.sceneIndex, list);
-  }
-  const lines = [...byScene.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([, list]) =>
-      list
-        .slice()
-        .sort((a, b) => a.step - b.step)
-        .map((attempt) => `${attempt.provider} ${attempt.status}`)
-        .join(" → "),
-    );
-  return [...new Set(lines)].join("; ");
-}
-
-export async function generateScenes(input: {
-  scenes: { id: string; prompt: string; durationS: number; sceneIndex?: number }[];
-  chain: readonly string[];
-  resolve?: (id: string) => VideoProvider;
-  portraitSvg?: string;
-}): Promise<{
-  ok: boolean;
-  produced: { index: number; model: string; frameUrl: string; durationS: number }[];
-  attempts: AttemptRecord[];
-}> {
-  const resolve = input.resolve ?? videoProvider;
-  const settled = await Promise.all(
-    input.scenes.map((scene, index) => runScene(scene, index, input.chain, resolve, input.portraitSvg)),
-  );
-  return {
-    ok: settled.every((scene) => scene.ok),
-    produced: settled.map((scene, index) => ({
-      index,
-      model: scene.model,
-      frameUrl: scene.frameUrl,
-      durationS: input.scenes[index]?.durationS ?? 0,
-    })),
-    attempts: settled.flatMap((scene) => scene.attempts),
-  };
-}
-
-async function runScene(
-  scene: { id: string; prompt: string; durationS: number; sceneIndex?: number },
-  index: number,
-  chain: readonly string[],
-  resolve: (id: string) => VideoProvider,
-  portraitSvg?: string,
-): Promise<SceneRun> {
-  const attempts: AttemptRecord[] = [];
-  for (let step = 0; step < chain.length; step += 1) {
-    const providerId = chain[step] ?? "";
-    try {
-      const provider = resolve(providerId);
-      const result = await provider.generateClip({
-        prompt: scene.prompt,
-        durationS: scene.durationS,
-        sceneId: scene.id,
-        sceneIndex: scene.sceneIndex ?? index,
-        portraitSvg,
-      });
-      attempts.push({ sceneIndex: index, step, provider: providerId, status: "ok" });
-      return {
-        ok: true,
-        model: result.providerId,
-        frameUrl: result.frameUrls[0] ?? "",
-        attempts,
-      };
-    } catch (error) {
-      const status: AttemptStatus = error instanceof ProviderRefusedError ? "refused" : "error";
-      const message = error instanceof Error ? error.message : "failed";
-      attempts.push({
-        sceneIndex: index,
-        step,
-        provider: providerId,
-        status,
-        detail: { message: message.slice(0, 300) },
-      });
-    }
-  }
-  return { ok: false, model: "", frameUrl: "", attempts };
-}
-
-export function chargeForScenes(
-  tier: Tier,
-  scenes: { durationS: number; model: string }[],
-  voiceOver = false,
-): number {
-  const durationS = scenes.reduce((sum, scene) => sum + scene.durationS, 0);
-  const models = new Set(scenes.map((scene) => scene.model));
-  if (models.size <= 1) {
-    return estimateClipCost({ tier, durationS, model: scenes[0]?.model, voiceOver }).total;
-  }
-  const fixed = estimateClipCost({ tier, durationS, voiceOver });
-  const videoCents = scenes.reduce(
-    (sum, scene) => sum + Math.round(videoUsdPerSecond(scene.model) * scene.durationS * 100),
-    0,
-  );
-  return (Math.round(fixed.script * 100) + Math.round(fixed.frames * 100) + Math.round(fixed.voice * 100) + videoCents) / 100;
-}
-
-function splitCents(totalCents: number, weights: number[]): number[] {
-  const weightSum = weights.reduce((sum, weight) => sum + weight, 0) || 1;
-  const raw = weights.map((weight) => (totalCents * weight) / weightSum);
-  const floors = raw.map((value) => Math.floor(value));
-  let leftover = totalCents - floors.reduce((sum, value) => sum + value, 0);
-  const order = raw
-    .map((value, index) => ({ index, frac: value - (floors[index] ?? 0) }))
-    .sort((a, b) => b.frac - a.frac);
-  for (const item of order) {
-    if (leftover <= 0) break;
-    floors[item.index] = (floors[item.index] ?? 0) + 1;
-    leftover -= 1;
-  }
-  return floors;
-}
-
+/**
+ * Checks the budget, records a `generating` video, and queues one clip job per
+ * scene on the first model of the tier's fallback chain. It then drives the
+ * job queue for up to `VIDEO_INLINE_WAIT_MS` (mock jobs settle well within
+ * that). Anything still running is finished by `/api/cron/tick` or
+ * `npm run worker`, not by this request.
+ */
 export async function generateVideo(input: {
   workspaceId: string;
   tier: Tier;
@@ -233,7 +60,12 @@ export async function generateVideo(input: {
   hook: string;
   voiceLines: string[];
   scenes: { visual: string; line: string; durationS: number }[];
-}): Promise<{ ok: true; videoId: string; attemptSummary: string | null } | { ok: false; error: string }> {
+  /** Who to tell in chat when the video settles after Generate has returned. */
+  notifyUserId?: string | null;
+  /** The chat conversation that message goes to. */
+  notifyConversationId?: string | null;
+  waitMs?: number;
+}): Promise<GenerateVideoResult> {
   const db = await getDb();
   const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, input.workspaceId)).limit(1);
   if (!workspace) return { ok: false, error: "Workspace not found" };
@@ -255,6 +87,21 @@ export async function generateVideo(input: {
     portraitSvg = avatar?.image ?? "";
   }
 
+  const plan: GenerationPlan = { hook: input.hook, scenes: input.scenes, voiceLines: input.voiceLines };
+
+  // Credits: reserve the quoted price now, capture when the clips finish (see settleVideo), release on failure.
+  const hold = await holdCredits({
+    workspaceId: workspace.id,
+    kind: "clip",
+    credits: quoteClipCredits({ tier: input.tier, durationS }).total,
+    description: `Video: ${input.title || "Untitled"} (${input.tier}, ${durationS}s)`,
+    model: TIER_MODEL[input.tier],
+    units: durationS,
+    costUsd: estimate.total,
+  });
+  if (!hold.ok) return { ok: false, error: hold.error };
+  const release = () => releaseCredits(hold.chargeId);
+
   const [video] = await db
     .insert(videos)
     .values({
@@ -265,89 +112,72 @@ export async function generateVideo(input: {
       status: "generating",
       tier: input.tier,
       model: TIER_MODEL[input.tier],
-      plan: { hook: input.hook, scenes: input.scenes, voiceLines: input.voiceLines },
+      plan,
       costEstimate: estimate,
       aiGenerated: workspace.aiDisclosureDefault,
     })
-    .returning();
-  if (!video) return { ok: false, error: "Could not start generation" };
+    .returning()
+    .catch(async (error: unknown) => {
+      await release();
+      throw error;
+    });
+  if (!video) {
+    await release();
+    return { ok: false, error: "Could not start generation" };
+  }
 
   try {
-    const chain = FALLBACK_CHAIN[input.tier];
-    const generated = await generateScenes({
-      chain,
-      portraitSvg,
-      scenes: input.scenes.map((scene, index) => ({
-        id: `${video.id}:${index}`,
-        prompt: `${input.prompt}\n${scene.visual}`,
-        durationS: scene.durationS,
-        sceneIndex: index,
-      })),
-    });
-
-    const clipOk = generated.ok;
-    const models = generated.produced.map((scene, index) => ({
-      durationS: input.scenes[index]?.durationS ?? scene.durationS,
-      model: scene.model || TIER_MODEL[input.tier],
-    }));
-    const charge = clipOk ? chargeForScenes(input.tier, models) : 0;
-    const shares = clipOk
-      ? splitCents(
-          Math.round(charge * 100),
-          input.scenes.map((scene) => scene.durationS),
-        )
-      : [];
-    const shareByScene = new Map<number, number>();
-    shares.forEach((cents, index) => shareByScene.set(index, cents / 100));
-
-    if (generated.attempts.length > 0) {
-      await db.insert(generationAttempts).values(
-        generated.attempts.map((attempt) => ({
-          videoId: video.id,
-          provider: attempt.provider,
-          status: attempt.status,
-          costUsd: clipOk && attempt.status === "ok" ? (shareByScene.get(attempt.sceneIndex) ?? 0) : 0,
-          detail: { sceneIndex: attempt.sceneIndex, step: attempt.step, ...(attempt.detail ?? {}) },
-        })),
-      );
+    await attachChargeVideo(hold.chargeId, video.id);
+    const chain = [...FALLBACK_CHAIN[input.tier]];
+    for (const [index, scene] of input.scenes.entries()) {
+      await enqueueClipJob({
+        workspaceId: workspace.id,
+        videoId: video.id,
+        request: {
+          sceneIndex: index,
+          step: 0,
+          chain,
+          prompt: `${input.prompt}\n${scene.visual}`,
+          durationS: scene.durationS,
+          sceneId: `${video.id}:${index}`,
+          ...(portraitSvg ? { portraitSvg } : {}),
+        },
+      });
     }
-
-    const attemptSummary = formatAttempts(generated.attempts);
-    if (!clipOk) {
-      await db
-        .update(videos)
-        .set({ status: "failed", model: TIER_MODEL[input.tier], costActualUsd: 0, updatedAt: new Date() })
-        .where(eq(videos.id, video.id));
-      return { ok: false, error: "Every model refused or failed this prompt. Nothing was charged." };
-    }
-
-    const manifest = stitch({
-      hook: input.hook,
-      scenes: input.scenes.map((scene, index) => ({
-        visual: scene.visual,
-        line: scene.line,
-        durationS: scene.durationS,
-        model: generated.produced[index]?.model || TIER_MODEL[input.tier],
-        frameUrl: generated.produced[index]?.frameUrl || "",
-      })),
-    });
-    const usedModel = manifest.scenes[0]?.model ?? TIER_MODEL[input.tier];
-    await db
-      .update(videos)
-      .set({
-        status: "ready",
-        model: usedModel,
-        manifest,
-        costActualUsd: charge,
-        updatedAt: new Date(),
-      })
-      .where(eq(videos.id, video.id));
-    return { ok: true, videoId: video.id, attemptSummary };
   } catch (error) {
     await db
       .update(videos)
       .set({ status: "failed", costActualUsd: 0, updatedAt: new Date() })
       .where(eq(videos.id, video.id));
+    await release();
     throw error;
   }
+
+  const status = await driveVideo(video.id, input.waitMs ?? inlineWaitMs());
+  if (status === "generating") {
+    // Ask the worker to post the outcome. If the video settled in the meantime, report it now instead.
+    const [still] = await db
+      .update(videos)
+      .set({
+        plan: {
+          ...plan,
+          notifyChat: true,
+          notifyUserId: input.notifyUserId ?? null,
+          notifyConversationId: input.notifyConversationId ?? null,
+        },
+      })
+      .where(and(eq(videos.id, video.id), eq(videos.status, "generating")))
+      .returning({ id: videos.id });
+    if (still) return { ok: true, videoId: video.id, attemptSummary: null, pending: true };
+  }
+  return settledResult(video.id);
+}
+
+async function settledResult(videoId: string): Promise<GenerateVideoResult> {
+  const db = await getDb();
+  const [video] = await db.select({ status: videos.status }).from(videos).where(eq(videos.id, videoId)).limit(1);
+  if (video?.status === "failed") {
+    return { ok: false, error: "Every model refused or failed this prompt. Nothing was charged." };
+  }
+  return { ok: true, videoId, attemptSummary: await attemptSummaryForVideo(videoId) };
 }

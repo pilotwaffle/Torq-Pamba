@@ -68,7 +68,7 @@ Rows are from the parity matrix in the research report (26 September 2026). Stat
 | 18 | Approval gate: nothing posts without sign-off | `/app/videos/[id]` previews the clip and asks for a creator nickname, a privacy choice with no default, interaction toggles that start off (comments, duet, stitch), commercial-content disclosure (your brand / branded content), an AI-generated label that starts on, music-usage consent, and express consent. Approve stays disabled until privacy is chosen and the consents are checked. An unapproved video cannot be scheduled | Match |
 | 19 | Scheduling: the user picks a slot, or the product picks the next good slot | Approved videos take a chosen time or the next 09:00, 12:00, or 18:00 in the workspace timezone. `/app/schedule` lists, reschedules, and cancels. Due rows become `due_manual`. Nothing is sent to a platform | Match |
 | 20 | Posting from real devices ("a real device opens TikTok or Instagram") | Official APIs only, and those calls are not in this repo. Device posting will not be built. Publishing through TikTok, Instagram, and Facebook official APIs is Phase 2 | Will not build |
-| 25 | Credits and pricing: Free / Hobby / Pro, per-second credit rates, Stripe | Placeholder test-mode plans: Free $0 (labeled "1 preview clip"), Creator $29/mo, Studio $99/mo. Stripe Checkout runs only with a test secret. List-price clip cost is shown before Generate, and a failed generation is not recorded as spend. Retail margin is not set. The "1 preview clip" line is the plan label; the enforced limit is the monthly budget cap | Beat |
+| 25 | Credits and pricing: Free / Hobby / Pro, per-second credit rates, Stripe | Test-mode credit plans: Free $0, Hobby $16/mo for 1,600 credits, Pro $100/mo for 10,000, and top-up packs at $0.01 a credit. Stripe Checkout (subscriptions and one-off top-ups) runs only with a test secret; `invoice.paid` grants the month's credits once per invoice. Each generation is priced in credits from catalog list prices times 1.5 (a standard 30s clip is 500 credits), shown before Generate, reserved when it starts, and refunded if it fails. Generation is blocked with a top-up or upgrade prompt when credits run short. The monthly dollar budget cap still applies on top | Match |
 | 29 | Managed accounts: accounts created, warmed, and posted for the customer, with a dedicated phone and SIM | Will not build. A later phase can offer seats for accounts the customer already owns and connects with official OAuth. This repo stores no social accounts | Will not build |
 | 30 | Account warming: automated browsing, likes, and follows | Will not build | Will not build |
 | 31 | Accounts-page claims: real iPhones, US SIM cards, shadow-ban avoidance, automatic replacement, hundreds of accounts | Will not build | Will not build |
@@ -149,7 +149,7 @@ A shorter module map, and how to add a feature through the extension points, is 
 
 ## Quickstart
 
-Use Node 24. That is the version CI installs. `package.json` allows Node 22 or newer.
+Use Node 24. That is the version CI installs. `package.json` allows Node 22 or newer. Install `ffmpeg` (with `ffprobe`): mock clips and every final MP4 are encoded with it.
 
 ```bash
 npm install
@@ -177,6 +177,7 @@ Open [http://localhost:3000](http://localhost:3000), create an account, and onbo
 | `npm run db:generate` | `drizzle-kit generate` into `./drizzle` |
 | `npm run db:migrate` | Apply `./drizzle` (PGlite, or Postgres when `DATABASE_URL` is set) |
 | `npm run setup` | Copy `.env.example` to `.env.local` if needed, then migrate |
+| `npm run worker` | Poll generation jobs (clip submit/poll/download, final render, lip-sync) outside any request. `POST /api/cron/tick` does the same work once per tick |
 
 ## Environment variables
 
@@ -190,17 +191,40 @@ Every variable in `.env.example`. Empty means the default in the last column. Do
 | `ALLOW_LOCAL_ONBOARDING` | No | empty | Set to `1` to allow onboarding fetches of private or local IPs in production. Those fetches are already allowed when `NODE_ENV` is not `production` |
 | `GEMINI_API_KEY` | No | empty | Google Gemini API for Omni Flash, Veo 3.1, Gemini 3.8 Flash extraction, and Gemini chat. Used only when `PROVIDER_MODE=live` |
 | `ANTHROPIC_API_KEY` | No | empty | Claude Sonnet 5 for live chat. Live chat tries this key, then `XAI_API_KEY` (Grok 4.7), then `GEMINI_API_KEY` |
+| `CHAT_AGENT_MODEL` | No | `claude-opus-5-5` | Claude model id for the tool-calling chat agent. The agent runs on Claude when `PROVIDER_MODE=live` and `ANTHROPIC_API_KEY` is set; otherwise chat uses the keyless command matcher |
 | `RUNWAY_API_KEY` | No | empty | Runway, Seedance 2.0. Used only when `PROVIDER_MODE=live` |
 | `XAI_API_KEY` | No | empty | xAI grok-imagine video and image, and Grok 4.7 chat. Used only when `PROVIDER_MODE=live` |
 | `KLING_ACCESS_KEY` | No | empty | Kling avatar access key. Live calls need this and `KLING_SECRET_KEY` |
 | `KLING_SECRET_KEY` | No | empty | Kling avatar secret. Used only when `PROVIDER_MODE=live` |
 | `HEYGEN_API_KEY` | No | empty | HeyGen Avatar IV. Used only when `PROVIDER_MODE=live` |
-| `STRIPE_SECRET_KEY` | No | empty | Stripe test secret (`sk_test_…`). A value starting with `sk_live_` throws and checkout does not start. With no key, billing simulates a test-mode upgrade and labels it simulated |
-| `STRIPE_PRICE_CREATOR` | No | empty | Stripe Price id for the Creator plan. Required only when a test secret is set and someone checks out Creator |
-| `STRIPE_PRICE_STUDIO` | No | empty | Stripe Price id for the Studio plan. Same rule as Creator |
+| `ELEVENLABS_API_KEY` | No | empty | ElevenLabs text-to-speech, instant voice clones, and voice previews. Without it, voices use mock WAV audio. Used only when `PROVIDER_MODE=live` |
+| `STRIPE_SECRET_KEY` | No | empty | Stripe test secret (`sk_test_…`). A value starting with `sk_live_` throws and checkout does not start. With no key, billing is simulated and labeled so: plan checkout and top-ups grant credits without payment, and each workspace starts with 5,000 starter credits |
+| `STRIPE_PRICE_HOBBY` | No | empty | Recurring monthly test-mode Price id for Hobby ($16, 1,600 credits). Required only when a test secret is set and someone subscribes to Hobby |
+| `STRIPE_PRICE_PRO` | No | empty | Recurring monthly test-mode Price id for Pro ($100, 10,000 credits). Same rule as Hobby |
 | `STRIPE_WEBHOOK_SECRET` | For the webhook | empty | Verifies `POST /api/billing/webhook`. When empty, the webhook returns 401 unless `ALLOW_INSECURE_LOCAL_ENDPOINTS=1` outside production |
 | `CRON_SECRET` | For the cron tick | empty | `POST /api/cron/tick` requires `Authorization: Bearer <secret>`. When empty, the tick returns 401 unless `ALLOW_INSECURE_LOCAL_ENDPOINTS=1` outside production |
 | `ALLOW_INSECURE_LOCAL_ENDPOINTS` | No | empty | Set to `1` on a local machine to run the cron tick and the webhook without their secrets. Ignored when `NODE_ENV` is `production` |
+| `RESEARCH_SOURCE` | No | empty | Research data sources, comma-separated in order of preference: `youtube`, `scrapecreators`, `apify`. Empty or `mock` uses sample data. A live source also needs `PROVIDER_MODE=live` and its key |
+| `YOUTUBE_API_KEY` | No | empty | YouTube Data API v3 key for research (official API, public channels and Shorts). Used only when `PROVIDER_MODE=live` |
+| `SCRAPECREATORS_API_KEY` | No | empty | ScrapeCreators key for research on public TikTok and Instagram posts. Used only when `PROVIDER_MODE=live` |
+| `APIFY_TOKEN` | No | empty | Apify token for research through the TikTok Scraper actor (public posts). Used only when `PROVIDER_MODE=live` |
+| `KLING_API_KEY` | No | empty | Kling API key, the current auth scheme. When set it is used instead of the access/secret pair |
+| `HEYGEN_VOICE_ID` | No | empty | HeyGen voice for script-driven avatar videos when no voice track is supplied |
+| `MEDIA_STORAGE` | No | `local` | Where clips and final MP4s are stored: `local` or `s3` (AWS S3 or Cloudflare R2) |
+| `MEDIA_LOCAL_DIR` | No | `./.data/media` | Directory for the `local` driver. Unit tests use the OS temp dir |
+| `MEDIA_S3_BUCKET` | With `s3` | empty | Bucket name |
+| `MEDIA_S3_REGION` | No | `us-east-1`, or `auto` with an endpoint | Signing region |
+| `MEDIA_S3_ENDPOINT` | No | empty | Custom endpoint such as `https://<account>.r2.cloudflarestorage.com`. Empty for AWS S3 |
+| `MEDIA_S3_ACCESS_KEY_ID` | With `s3` | empty | Access key id |
+| `MEDIA_S3_SECRET_ACCESS_KEY` | With `s3` | empty | Secret access key |
+| `MEDIA_S3_FORCE_PATH_STYLE` | No | path-style with an endpoint | `1` for path-style URLs, `0` for virtual-hosted |
+| `MEDIA_S3_PUBLIC_BASE_URL` | No | empty | Public base URL (CDN or R2 public bucket). Otherwise media is served through short-lived presigned URLs |
+| `FFMPEG_PATH` | No | `ffmpeg` | ffmpeg binary for mock clips and the final render |
+| `FFPROBE_PATH` | No | `ffprobe` | ffprobe binary for media metadata |
+| `FFMPEG_FONT_FILE` | No | a system font | Font for burned-in captions. Without a usable font, captions ship as a WebVTT track instead |
+| `VIDEO_INLINE_WAIT_MS` | No | `45000` | How long Generate drives the job queue before returning "still generating" |
+| `VIDEO_JOB_TIMEOUT_MS` | No | `1200000` | How long one provider clip job may run before the fallback chain moves on |
+| `WORKER_INTERVAL_MS` | No | `2000` | Pause between passes of `npm run worker` |
 
 `npm run capture` sets `CAPTURE=1` itself. That variable is not part of app configuration.
 
@@ -334,7 +358,7 @@ Vercel or Railway is enough for this phase.
 
 ## Testing
 
-- Unit: `npm test`. Vitest, Node environment, in-memory PGlite. Covers pricing totals, the router and fallback, approval rules, the schedule transition to `due_manual`, billing’s refusal of live Stripe keys, onboarding fetch guards, the v2 migration (no schema drift, workspace cascades, plan seeds), the model, provider, chat tool, and nav registries, the fail-closed cron and webhook endpoints, and a source scan that fails if a forbidden publish endpoint appears under `src/`.
+- Unit: `npm test`. Vitest, Node environment, in-memory PGlite. Covers pricing totals, the router and fallback, approval rules, the schedule transition to `due_manual`, billing’s refusal of live Stripe keys, the credit ledger (concurrent reservations, idempotent grants, refunds on failure) and webhook idempotency, onboarding fetch guards, the v2 migration (no schema drift, workspace cascades, plan seeds), the model, provider, chat tool, and nav registries, the fail-closed cron and webhook endpoints, and a source scan that fails if a forbidden publish endpoint appears under `src/`.
 - Postgres: CI also runs Vitest against Postgres 16 with `DATABASE_URL` set, one file at a time, because `npm test` itself clears `DATABASE_URL`.
 - End to end: `npm run test:e2e`. Playwright drives Chromium through signup, the demo-site onboard, chat, approval, and the queue. The web server is a production build on port 3100 with `PROVIDER_MODE=mock`. Core specs are in `e2e/core/`; each feature adds `e2e/<feature>/` using the helpers in `e2e/support/`.
 - Capture: `npm run capture`, then `bash scripts/make-media.sh`, refreshes `docs/images/` and `docs/media/`.
