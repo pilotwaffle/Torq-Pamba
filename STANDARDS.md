@@ -19,7 +19,7 @@ These are the rules every change to Torq-Pamba is held to. Reviewers block on th
 
 - Endpoints that act without a user session must be authenticated by a secret, and must refuse (401) when that secret is unset, except in explicit local mode (`ALLOW_INSECURE_LOCAL_ENDPOINTS=1`, never in production): `POST /api/cron/tick` (`CRON_SECRET`), `POST /api/billing/webhook` (`STRIPE_WEBHOOK_SECRET`, signature checked). See `src/lib/local-mode.ts`, `src/lib/endpoint-auth.test.ts` and `src/lib/security/fail-closed.test.ts`.
 - In production, missing `TOKEN_ENCRYPTION_KEY` or `OAUTH_STATE_SECRET` throws instead of falling back to a dev key.
-- Media is served only by unguessable key (`isMediaKey`), never by path.
+- Media is served only to a signed-in member of its workspace (`/api/media/[id]`), or to a platform through a short-lived HMAC-signed pull URL for a ready, approved render (`/api/media/[id]/pull`), never by path.
 
 ## 4. Secrets
 
