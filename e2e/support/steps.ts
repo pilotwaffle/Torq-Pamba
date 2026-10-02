@@ -2,7 +2,7 @@ import { expect, type Page } from "@playwright/test";
 import { workspaceLink } from "./nav";
 import { hold, shot, type Pace } from "./pace";
 
-export const DEMO_URL = "http://localhost:3100/demo-site";
+export const DEMO_URL = `http://localhost:${process.env.PORT ?? 3100}/demo-site`;
 export const VIDEO_PROMPT = "Make a 30s video about our oat-milk cold brew for busy commuters";
 
 /**

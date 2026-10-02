@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { Workspace } from "@/db/schema";
+import { CreditBalanceWidget } from "@/components/credits/balance-widget";
 import { planLabel } from "@/components/ui";
 
 export type SidebarWidgetProps = { workspace: Workspace };
@@ -23,6 +24,7 @@ export const SIDEBAR_WIDGETS: readonly SidebarWidget[] = [
       </span>
     ),
   },
+  { id: "credit-balance", order: 200, render: ({ workspace }) => <CreditBalanceWidget workspaceId={workspace.id} /> },
 ];
 
 export function sortedSidebarWidgets(widgets: readonly SidebarWidget[] = SIDEBAR_WIDGETS): SidebarWidget[] {

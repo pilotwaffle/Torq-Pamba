@@ -18,7 +18,7 @@ Torq-Pamba is a Next.js App Router app. Pages and server actions handle HTTP. Ru
 | `src/lib/providers` | Vendor adapters (one file each, listed in `adapters.ts`), the registry, and the mock provider |
 | `src/lib/approval.ts` | The gate. Privacy has no default. Consents start unchecked. The AI label starts on |
 | `src/lib/schedule.ts` | Slots at 09:00, 12:00, and 18:00 in the workspace timezone. `processDueItems` sets `due_manual`. There is no publish function |
-| `src/lib/billing.ts` | Free / Creator / Studio as placeholder test-mode plans. Refuses `sk_live_` |
+| `src/lib/billing.ts` and `src/lib/credits` | Free / Hobby / Pro credit plans, top-ups, the credit ledger, and per-generation reserve, capture, and release. Stripe test mode only; refuses `sk_live_` |
 | `src/db` | Schema (`src/db/schema/`, one file per domain) and `getDb()` |
 
 `getDb()` stores its promise on `globalThis` so Next.js dev reload does not open PGlite twice, and it runs the SQL in `./drizzle` on first use. `PGLITE_DIR=memory` keeps the database in memory. `next.config.ts` lists `@electric-sql/pglite` in `serverExternalPackages`. Routes that use the database set `dynamic = "force-dynamic"` so `next build` does not connect.
@@ -75,7 +75,9 @@ The status enum also includes `draft` and `planned`. The chat path inserts the r
 6. Approval: `canApprove` requires a privacy value, music consent, and schedule consent. Commercial disclosure requires a type. Clearing the AI label requires `confirmAiOff`. `approveVideo` writes the approval JSON and the audit row.
 7. Schedule: the user picks a datetime or the next 09:00 / 12:00 / 18:00. Only an approved video can be queued. `POST /api/cron/tick` (Bearer `CRON_SECRET`) calls `processDueItems`, which sets due rows to `due_manual`.
 
-Stripe checkout is `POST /api/billing/checkout`. It creates a test-mode Checkout Session when `STRIPE_SECRET_KEY` is an `sk_test_` key and the price id is set. Otherwise it marks the workspace plan in the database and tells the UI the upgrade was simulated. `POST /api/billing/webhook` verifies the signature with `STRIPE_WEBHOOK_SECRET`.
+Billing is in credits (`src/lib/credits/`). `workspaces.credit_balance` caches the sum of `credit_ledger`; every change row-locks the workspace and writes the ledger row in the same transaction, and grants carry an idempotency key (`stripe:invoice:<id>`, `topup:<id>`, `signup:<workspace>`). A generation is priced from the catalog (`credits` on an entry, or list price × 1.5 at $0.01 a credit), reserved before the video row is inserted, captured at what the models that ran cost (never more than the quote), and released on failure.
+
+`POST /api/billing/checkout` (plan) and `POST /api/billing/top-up` (pack) create test-mode Checkout Sessions when `STRIPE_SECRET_KEY` is an `sk_test_` key; `POST /api/billing/portal` opens the Stripe billing portal. With no key, checkout is simulated: it grants the plan's month or the pack at once, and each workspace starts with 5,000 starter credits. Simulation is off in a production build with `PROVIDER_MODE=live`. `POST /api/billing/webhook` verifies the signature with `STRIPE_WEBHOOK_SECRET`, refuses live-mode events, and handles `checkout.session.completed` and `async_payment_succeeded` (link the subscription, or pay a top-up), `invoice.paid` (grant the month on `subscription_create` and `subscription_cycle`), and `customer.subscription.updated` and `deleted`.
 
 Both machine endpoints fail closed. With `CRON_SECRET` or `STRIPE_WEBHOOK_SECRET` unset they return 401, unless `ALLOW_INSECURE_LOCAL_ENDPOINTS=1` and `NODE_ENV` is not `production` (`src/lib/local-mode.ts`).
 

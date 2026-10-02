@@ -2,6 +2,8 @@ import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { avatars, generationAttempts, videos, workspaces } from "@/db/schema";
 import { remainingBudgetUsd } from "@/lib/budget";
+import { attachChargeVideo, captureCredits, holdCredits, releaseCredits } from "@/lib/credits/charges";
+import { creditsForScenes, quoteClipCredits } from "@/lib/credits/pricing";
 import {
   estimateClipCost,
   FALLBACK_CHAIN,
@@ -255,6 +257,19 @@ export async function generateVideo(input: {
     portraitSvg = avatar?.image ?? "";
   }
 
+  // Credits: reserve the quoted price now, capture on success, release on failure.
+  const hold = await holdCredits({
+    workspaceId: workspace.id,
+    kind: "clip",
+    credits: quoteClipCredits({ tier: input.tier, durationS }).total,
+    description: `Video: ${input.title || "Untitled"} (${input.tier}, ${durationS}s)`,
+    model: TIER_MODEL[input.tier],
+    units: durationS,
+    costUsd: estimate.total,
+  });
+  if (!hold.ok) return { ok: false, error: hold.error };
+  const release = () => releaseCredits(hold.chargeId);
+
   const [video] = await db
     .insert(videos)
     .values({
@@ -269,10 +284,18 @@ export async function generateVideo(input: {
       costEstimate: estimate,
       aiGenerated: workspace.aiDisclosureDefault,
     })
-    .returning();
-  if (!video) return { ok: false, error: "Could not start generation" };
+    .returning()
+    .catch(async (error: unknown) => {
+      await release();
+      throw error;
+    });
+  if (!video) {
+    await release();
+    return { ok: false, error: "Could not start generation" };
+  }
 
   try {
+    await attachChargeVideo(hold.chargeId, video.id);
     const chain = FALLBACK_CHAIN[input.tier];
     const generated = await generateScenes({
       chain,
@@ -318,6 +341,7 @@ export async function generateVideo(input: {
         .update(videos)
         .set({ status: "failed", model: TIER_MODEL[input.tier], costActualUsd: 0, updatedAt: new Date() })
         .where(eq(videos.id, video.id));
+      await release();
       return { ok: false, error: "Every model refused or failed this prompt. Nothing was charged." };
     }
 
@@ -342,12 +366,14 @@ export async function generateVideo(input: {
         updatedAt: new Date(),
       })
       .where(eq(videos.id, video.id));
+    await captureCredits(hold.chargeId, { credits: creditsForScenes(input.tier, models), costUsd: charge });
     return { ok: true, videoId: video.id, attemptSummary };
   } catch (error) {
     await db
       .update(videos)
       .set({ status: "failed", costActualUsd: 0, updatedAt: new Date() })
       .where(eq(videos.id, video.id));
+    await release();
     throw error;
   }
 }

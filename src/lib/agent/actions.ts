@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireWorkspace } from "@/lib/auth/guards";
 import { generateFromMessage, handleUserMessage, tierFromForm } from "@/lib/agent/run";
@@ -26,5 +27,7 @@ export async function generateAction(
     hookIndex: Number.isInteger(hook) && hook >= 0 && hook <= 2 ? hook : 0,
   });
   if (!result.ok) return { error: result.error };
+  // The sidebar credit balance lives in the /app layout.
+  revalidatePath("/app", "layout");
   redirect("/app/chat");
 }

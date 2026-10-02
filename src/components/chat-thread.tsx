@@ -6,6 +6,7 @@ import Link from "next/link";
 import { generateAction, sendMessageAction } from "@/lib/agent/actions";
 import { isPlanMessage, isReadyMessage, type VideoPlan } from "@/lib/agent/plan";
 import { FALLBACK_CHAIN, TIER_MODEL, estimateClipCost, formatUsd, type Tier } from "@/lib/pricing";
+import { CreditQuote } from "@/components/credits/credit-quote";
 import { cardClass, fieldClass, primaryButton } from "@/components/ui";
 
 export type ChatMessageView = {
@@ -136,6 +137,7 @@ function PlanCard({ messageId, plan }: { messageId: string; plan: VideoPlan }) {
           </tbody>
         </table>
       </div>
+      <CreditQuote tier={tier} durationS={plan.durationS} />
       <div className="flex flex-col gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-medium tracking-wide text-zinc-500 uppercase">Model</span>
