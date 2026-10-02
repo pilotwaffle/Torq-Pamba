@@ -1,6 +1,6 @@
 import { and, eq, gte, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
-import { publishAttempts, publishEvents, publishingConnections, videos } from "@/db/schema";
+import { members, publishAttempts, publishEvents, publishingConnections, videos } from "@/db/schema";
 import { writeAudit } from "@/lib/audit";
 import { publicMediaUrl } from "@/lib/media/storage";
 import { parseManifest } from "@/lib/router";
@@ -10,13 +10,21 @@ import { facebookPublisher } from "./live/facebook";
 import { instagramPublisher } from "./live/instagram";
 import { tiktokPublisher } from "./live/tiktok";
 import { mockPublisher } from "./mock";
-import { assertMetaPrivacy, assertPublishConsent, postCaption, PublishRuleError, type ApprovalRecord } from "./rules";
+import {
+  assertAiDisclosure,
+  assertMetaPrivacy,
+  assertOwnerApproval,
+  assertPublishConsent,
+  postCaption,
+  PublishRuleError,
+  type ApprovalRecord,
+} from "./rules";
 import type { PublishContext, Publisher } from "./types";
 
 /**
  * The only place a publish happens. Every attempt re-checks the approval
- * (privacy chosen, music and posting consent), the platform rules and the AI
- * disclosure, and every state change lands in publish_events plus the
+ * (given by a workspace owner, privacy chosen, music and posting consent), the
+ * platform rules and the AI disclosure (always on), and every state change lands in publish_events plus the
  * workspace audit log. Rows are the foundation's `publish_attempts`:
  * pending -> submitted (claimed) -> published | failed.
  */
@@ -43,6 +51,15 @@ export async function logPublishEvent(input: { jobId: string; workspaceId: strin
     status: input.status,
     detail: input.detail ?? {},
   });
+}
+
+async function ownerUserIds(workspaceId: string): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db
+    .select({ userId: members.userId })
+    .from(members)
+    .where(and(eq(members.workspaceId, workspaceId), eq(members.role, "owner")));
+  return rows.map((row) => row.userId);
 }
 
 async function recentTikTokAccounts(now: Date): Promise<string[]> {
@@ -95,12 +112,11 @@ export async function runPublishJob(
       throw new PublishRuleError("Only an approved video can be posted.");
     }
     const approval = (video.approval ?? null) as ApprovalRecord | null;
+    assertOwnerApproval(approval, await ownerUserIds(job.workspaceId));
     assertPublishConsent(approval);
     assertMetaPrivacy(platform, String(approval?.privacy ?? ""));
-    // ai_disclosure is what the platform is told. An AI-generated video is never posted without it.
-    if (video.aiGenerated && !job.aiDisclosure) {
-      throw new PublishRuleError("This video is AI-generated, so it must be posted with the platform's AI label. Nothing was sent.");
-    }
+    // Every video is AI-generated, so the AI label is always sent, whatever the video row says.
+    assertAiDisclosure(job.aiDisclosure);
     const manifest = parseManifest(video.manifest);
     const publisher = selectPublisher({ mode: account.mode, platform }, options.publishers);
     const outcome = await publisher.publish({
@@ -113,7 +129,7 @@ export async function runPublishJob(
         title: video.title,
         durationS: manifest?.totalDurationS ?? 0,
         caption: postCaption({ hook: manifest?.hook ?? "", title: video.title, captions: (manifest?.captions ?? []).map((c) => c.text) }),
-        aiGenerated: job.aiDisclosure,
+        aiGenerated: true,
         approval: approval ?? {},
         mediaUrl: video.mediaKey ? publicMediaUrl(video.mediaKey) : null,
       },

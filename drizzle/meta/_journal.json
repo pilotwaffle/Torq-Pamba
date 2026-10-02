@@ -50,6 +50,13 @@
       "when": 1790921590980,
       "tag": "0006_drop_phase_duplicates",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790923968954,
+      "tag": "0007_ai_disclosure_always_on",
+      "breakpoints": true
     }
   ]
 }

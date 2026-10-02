@@ -4,7 +4,7 @@
 
 **Fallback:** the original branch `feat/phase2-plus` (base `7f4cc80`, head `57a17eb`) is unchanged.
 
-**Publishing criterion.** Reversing the V2 no-publish criterion (CONTRIBUTING.md criterion 1 and README rule 1, narrowed in `7d62583`) needs Barry's explicit, named yes before any push or merge of this branch.
+**Publishing criterion.** Reversing the V2 no-publish criterion needed Barry's explicit, named yes before any push or merge of this branch. **Barry gave it on 2026-10-02 at 1:47 AM CT.** His rule now replaces CONTRIBUTING.md criterion 1, and README rule 1 matches it: "Torq-Pamba may publish to TikTok, Instagram and Facebook through official APIs only. Publish code lives only in src/lib/publish/live/. Barry must approve every post before it publishes. The AI-generated label is always on. No phone-farm, device or managed-account posting." The guards that enforce it are in the "Barry's publishing rule" section below.
 
 This branch was pushed by Stan as draft PR #3 into `feat/v2-foundation`; PR #2 (`feat/phase2-plus` at `57a17eb`) was closed unmerged. I pushed nothing from this clone (the push URL is `DISABLED`), and made no merge to any remote branch, tag or deploy. Boris's branches, worktrees and bundles were not modified. Mock mode is the default. No secrets are in the tree.
 
@@ -16,7 +16,9 @@ This branch was pushed by Stan as draft PR #3 into `feat/v2-foundation`; PR #2 (
 | `fbd82e8` | Phase 4: platform | 180 passed (26 files) | 10 passed, 1 skipped |
 | `b62818b` | REPORT.md | 180 passed (26 files) | 10 passed, 1 skipped |
 | `036ab55` | Consolidate onto foundation tables (migrations 0005, 0006) | 182 passed (26 files) | 10 passed, 1 skipped |
-| this commit | REPORT.md update | 182 passed (26 files) | 10 passed, 1 skipped |
+| `0b0e479` | REPORT.md update (pushed by Stan as draft PR #3) | 182 passed (26 files) | 10 passed, 1 skipped |
+| `a159431` | PR #2 follow-up: unused `roundCents` import, REPORT push/PR line | 182 passed (26 files), lint 0 warnings | 10 passed, 1 skipped |
+| Barry's rule commit | Barry's publishing rule: CONTRIBUTING/README, owner approval, AI label always on (0007), device/private-API scan, three platforms | 190 passed (27 files), lint 0 warnings | 10 passed, 1 skipped |
 
 **Unit count check.** The target was at least base plus ported tests. Base is 89. The ported tests are 91: 140 on the old branch minus 49 on the original main, made up of 40 in phase 2, 28 in phase 3 and 23 in phase 4. 89 + 91 = 180, and 180 pass. No ported test was dropped. The consolidation added 2 more (an `ai_disclosure` publish test and a 0005/0006 migration test), giving 182. The two fail-closed tests that overlap with Boris's coverage were kept and moved to his 401 semantics.
 
@@ -111,13 +113,37 @@ Boris's foundation tables are now canonical. My five duplicate tables are gone, 
 
 **No data copy.** 0005 and 0006 copy no rows from the dropped tables, because this branch was never deployed and those tables never held production data. If any environment ever ran 0002–0004 with real data, it needs a hand-written copy before 0006.
 
-**Credits vs USD.** `api_keys.max_credits` is an integer ceiling (0–10,000,000), so the old USD caps convert at $0.01 per credit (`USD_PER_CREDIT`), the same rate as Boris's f-credits branch. The base has no credit ledger. Spend under a ceiling is the sum of `api_requests.credits` for the grant in the calendar month (UTC). Switch to the ledger when f-credits lands. Settings shows "credits used / ceiling ($ spent)". The consent page and the key form ask for a "monthly credit ceiling" (OAuth default 1,000).
+**Credits vs USD.** `api_keys.max_credits` is an integer ceiling (0–10,000,000), so the old USD caps convert at $0.01 per credit (`USD_PER_CREDIT`). **That rate is an assumption, not a decision.** Credit pricing has not been confirmed; I took $0.01 from Boris's f-credits branch only so the ceiling has a unit. The base has no credit ledger. Spend under a ceiling is the sum of `api_requests.credits` for the grant in the calendar month (UTC). Switch to the ledger when f-credits lands. Settings shows "credits used / ceiling ($ spent)". The consent page and the key form ask for a "monthly credit ceiling" (OAuth default 1,000).
 
 **Tables that stay.** `publish_events` (the audit trail for an attempt), `api_requests`, `oauth_clients`, `oauth_codes`, `service_requests` and the reach tables (`hook_experiments`, `hook_variants`, `ad_handoffs`, `creator_briefs`) have no foundation equivalent. They are kept, with their FKs re-pointed.
 
 **Left as-is: `videos.media_key`.** Per Boris, `media_key` is not mapped onto `videos.current_render_id`, and my `src/lib/media/stitch.ts` and `storage.ts` stay as they are. At integration, `media_key` moves to branch a's render API. For the record, the `video_renders` table is already in the 84b22bb schema (`schema/media.ts`); what the base lacks is a render API to write it.
 
 **Rebase pending.** Boris will send a wave1-integration SHA. This branch will be rebased onto it then. Nothing here waits on it.
+
+## Barry's publishing rule (named yes, 2026-10-02 1:47 AM CT)
+
+This is its own commit on top of the PR #2 follow-up. CONTRIBUTING.md criterion 1 now carries Barry's wording, and README rule 1 matches it. Each part of the rule has a guard:
+
+- **(a) Official endpoints only, under `src/lib/publish/live/`.** Already covered by `src/lib/schedule.test.ts`. One test scans `src/` and allows publish endpoints only in `live/`; the allowlist can't be vacuous. A second test pins the importers of `live/` to `lib/publish/dispatch.ts`, `lib/publish/accounts.ts` and `lib/analytics/index.ts`.
+- **(b) Barry approves every post.** `approveVideo` now records `approvedBy` (the approving user) in the approval record. At post time the dispatcher runs `assertOwnerApproval`, which checks that `approvedBy` is an `owner` member of the workspace. A post never publishes with no approval, an approval with no approver, an approval from a non-owner member, or one from someone outside the workspace. New tests: "never publishes without an approval from the workspace owner on record" in `publish-flow.test.ts`, and a rule unit test in `publish-rules.test.ts`.
+- **(c) AI label always on, for every video.** The opt-out on the publish path is gone:
+  - Enqueue always writes `ai_disclosure = true`. It no longer copies `videos.ai_generated`.
+  - Migration `0007_ai_disclosure_always_on`, generated by drizzle-kit, adds `CHECK (ai_disclosure = true)` on `publish_attempts`.
+  - The dispatcher runs `assertAiDisclosure`.
+  - `PublishContext.video.aiGenerated` is the type `true`.
+  - The TikTok body builder hard-codes `is_aigc: true`, and the Instagram container hard-codes `is_ai_generated: true`. Neither takes an input that could turn it off.
+  - The old test "posted without the label" (for a video marked not AI-generated) was inverted to the new rule. That video is now queued and posted with the label, and the database rejects both an update and an insert with `ai_disclosure = false`.
+- **(d) No device, emulator, Appium, ADB, private-API or managed-account posting.** New `src/lib/publish/compliance.test.ts` adds four tests:
+  1. A code scan of `src/` and `scripts/` covers ADB commands, UiAutomator, XCUITest, the WebDriver hub, emulators (Genymotion, BlueStacks, AVD), Instagram's and TikTok's private mobile APIs and request signing, the platforms' Android app packages, and scripted logins to the consumer sites. It also fails on any import of an automation or private-API package (Appium, WebdriverIO, Selenium, Puppeteer, Playwright, adbkit, instagram-private-api, instagrapi, TikTok private clients and others).
+  2. The same scan runs over `e2e/`, which may import only `@playwright/test`.
+  3. A `package.json` check allows no such runtime dependency; `@playwright/test` is the only one, as a dev dependency.
+  4. A non-vacuity test: every signature catches a sample, and the official endpoints stay allowed.
+- **(e) Only TikTok, Instagram and Facebook.** These were already enforced by `asPlatform` and `isPlatform`; the new tests pin them. Every other `social_platform` value (`youtube`) and arbitrary names are rejected. `PLATFORMS` and the publish modes cover exactly the three. `live/` holds exactly `facebook.ts`, `http.ts`, `instagram.ts` and `tiktok.ts`. A YouTube connection can't be targeted, and a YouTube attempt fails closed with only `processing` and `failed` events, so nothing is sent.
+
+**Test fixtures corrected for (b).** Some fixtures wrote an approval straight into the database with no approver, or moved a video between workspaces. They now record the owner as approver; the assertions are unchanged. They are the publish-flow helper `approvalFor`, the analytics test's moved draft video, and the reach-flow base video. The reach-flow variant check now also asserts `approvedBy`.
+
+**Left as-is, deliberately.** The in-app "AI-generated" toggle on the approval screen and the workspace "AI disclosure default" are Boris's base features and are covered by his tests. They still exist, and still need confirmation plus an audit row to turn off. They no longer reach any platform, because the publish path ignores them. If "always on" should also remove those in-app toggles, that's a product change to Boris's approval and settings code, and should be its own decision.
 
 ## Why the work is split this way
 
@@ -173,7 +199,7 @@ All of it lives in `src/lib/reach/`:
 
 **Credentials** (`src/lib/platform/credentials.ts`). There are three kinds of secret: API keys (`tpk_`), OAuth access tokens (`tpa_`, valid 1 h) and refresh tokens (`tpr_`, valid 30 d). Only SHA-256 hashes are stored. Credentials are grouped into grants, and each grant has:
 - a scope, read or write
-- an optional monthly spending cap in USD (calendar month, UTC); since `036ab55` this is `api_keys.max_credits`, in credits at $0.01 each
+- an optional monthly spending cap in USD (calendar month, UTC); since `036ab55` this is `api_keys.max_credits`, in credits at an assumed (unconfirmed) $0.01 each
 - a request log, which backs a limit of 120 requests per minute
 
 Refresh rotation revokes the old pair and re-issues new tokens on the same grant.
@@ -262,7 +288,7 @@ Nothing was called live. These were written from public docs and may be wrong:
 - **Done-with-you** leads are stored, but nobody is notified by email.
 - **Ads.** No programmatic TikTok or Meta marketing-API use (hand-off only, by design).
 - **Render model.** `videos.media_key` and my stitch and storage modules are still used, instead of `video_renders` and `current_render_id`. They move to branch a's render API at integration (see "Consolidation").
-- **Credits.** The spend ceiling counts credits from `api_requests`. There is no shared credit ledger until f-credits lands.
+- **Credits.** The spend ceiling counts credits from `api_requests`. There is no shared credit ledger until f-credits lands. The $0.01-per-credit rate is still an unconfirmed assumption.
 - **Wave-1 merge.** This branch will be rebased onto Boris's wave1-integration SHA when he sends it. None of Boris's wave-1 feature branches (video pipeline, chat agent, voices, editor, research, credits) are on this base. Merging them will conflict at least on `src/lib/media/*` and `src/lib/router.ts` (video pipeline), the `plan` tool (chat agent), and the nav list and shell test (every feature that adds a page).
 - **Won't build** (compliance): device or real-iPhone posting, managed accounts and warming, and a metadata scrubber.
 

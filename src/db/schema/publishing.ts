@@ -1,6 +1,8 @@
+import { sql } from "drizzle-orm";
 import {
   bigint,
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -92,6 +94,8 @@ export const publishAttempts = pgTable(
     index("publish_attempts_workspace_idx").on(table.workspaceId, table.createdAt),
     index("publish_attempts_schedule_idx").on(table.scheduleItemId),
     uniqueIndex("publish_attempts_external_idx").on(table.platform, table.externalPostId),
+    // Added in 0007. Everything Torq-Pamba makes is AI-generated, so no publish attempt may drop the AI label.
+    check("publish_attempts_ai_disclosure_on", sql`${table.aiDisclosure} = true`),
   ],
 );
 

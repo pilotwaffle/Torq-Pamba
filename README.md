@@ -294,13 +294,13 @@ Live HTTP runs only when `PROVIDER_MODE=live` and that adapter’s key is set. T
 
 These are enforced in code and covered by tests. Reviewers treat a violation as a defect. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-1. No code path publishes to TikTok, Instagram, or Facebook. The schedule queue does not call TikTok Content Posting, Instagram `media_publish`, or Facebook `video_reels`. A due item becomes `due_manual`.
-2. AI disclosure starts on. `aiGenerated` defaults to true. Turning it off on a video, or turning off the workspace default, requires an explicit confirmation and is written to `audit_log`.
+1. Torq-Pamba may publish to TikTok, Instagram and Facebook through official APIs only. Publish code lives only in src/lib/publish/live/. Barry must approve every post before it publishes. The AI-generated label is always on. No phone-farm, device or managed-account posting. Only TikTok, Instagram and Facebook can be reached. A post publishes only if a workspace owner's approval is on record. `publish_attempts.ai_disclosure` is always true, enforced by a database check, for every video. Source scans pin the official endpoints to `src/lib/publish/live/` and fail on device, emulator, Appium, ADB, private-API or managed-account login code. Mock publishing is the default (`PUBLISH_MODE=live` is required), and due items without targets become `due_manual`. See CONTRIBUTING.md criterion 1.
+2. AI disclosure starts on. `aiGenerated` defaults to true. Turning it off on a video, or turning off the workspace default, requires an explicit confirmation and is written to `audit_log`. That in-app setting never reaches a platform: every publish carries the AI label (rule 1).
 3. The product has no device or SIM farm, no account warming, no account creation, sale, or transfer, no ban evasion, and no tool that strips AI-provenance metadata. The terms forbid those uses.
 4. Stripe is test mode only. `sk_live_` keys throw before checkout or webhooks run. With no secret, checkout is a labeled simulation.
 5. Provider adapters call the network only in live mode with a key, and never when `NODE_ENV` is `test`. The default mode is `mock`.
 
-Phase 2 changes rule 1: publishing now exists, but only through the official TikTok Content Posting API, Instagram content publishing and Facebook Page Reels, only from `src/lib/publish/live/`, only with `PUBLISH_MODE=live`, and only to accounts connected with OAuth. A source-scan test pins those endpoints to that folder. Mock publishing is the default. The schedule page says: Torq-Pamba never posts from devices.
+Rule 1 is Barry's publishing rule (approved by name on 2026-10-02). It replaced the original "no publishing" rule. Publishing goes through the official TikTok Content Posting API, Instagram content publishing and Facebook Page Reels, only to accounts connected with OAuth. The schedule page says: Torq-Pamba never posts from devices.
 
 ## Out of scope (permanently)
 
@@ -334,7 +334,7 @@ Vercel or Railway is enough for this phase.
 
 ## Testing
 
-- Unit: `npm test`. Vitest, Node environment, in-memory PGlite. Covers pricing totals, the router and fallback, approval rules, the schedule transition to `due_manual`, billing’s refusal of live Stripe keys, onboarding fetch guards, the v2 migration (no schema drift, workspace cascades, plan seeds), the model, provider, chat tool, and nav registries, the fail-closed cron and webhook endpoints, and a source scan that fails if a forbidden publish endpoint appears under `src/`.
+- Unit: `npm test`. Vitest, Node environment, in-memory PGlite. Covers pricing totals, the router and fallback, approval rules, the schedule transition to `due_manual`, billing’s refusal of live Stripe keys, onboarding fetch guards, the v2 migration (no schema drift, workspace cascades, plan seeds), the model, provider, chat tool, and nav registries, the fail-closed cron and webhook endpoints, a source scan that fails if a publish endpoint appears under `src/` outside `src/lib/publish/live/`, and the publishing-rule tests: owner approval, the AI label always on, three platforms only, and no device, emulator or private-API code.
 - Postgres: CI also runs Vitest against Postgres 16 with `DATABASE_URL` set, one file at a time, because `npm test` itself clears `DATABASE_URL`.
 - End to end: `npm run test:e2e`. Playwright drives Chromium through signup, the demo-site onboard, chat, approval, and the queue. The web server is a production build on port 3100 with `PROVIDER_MODE=mock`. Core specs are in `e2e/core/`; each feature adds `e2e/<feature>/` using the helpers in `e2e/support/`.
 - Capture: `npm run capture`, then `bash scripts/make-media.sh`, refreshes `docs/images/` and `docs/media/`.

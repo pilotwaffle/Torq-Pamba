@@ -6,7 +6,9 @@ import { instagramPublisher, buildReelContainer } from "./live/instagram";
 import { buildTikTokDirectPostBody, tiktokPublisher, TIKTOK_ENDPOINTS } from "./live/tiktok";
 import { authorizeUrl, OAuthStateError, pkceChallenge, signState, verifyState } from "./oauth";
 import {
+  assertAiDisclosure,
   assertMetaPrivacy,
+  assertOwnerApproval,
   assertPublishConsent,
   effectiveTikTokPrivacy,
   postCaption,
@@ -143,6 +145,17 @@ describe("official OAuth", () => {
 });
 
 describe("posting rules", () => {
+  it("needs an owner's approval on record and an AI label that is always on", () => {
+    expect(() => assertOwnerApproval(null, ["owner-1"])).toThrow(/no approval from the workspace owner/);
+    expect(() => assertOwnerApproval({ ...approval }, ["owner-1"])).toThrow(/no approval from the workspace owner/);
+    expect(() => assertOwnerApproval({ ...approval, approvedBy: "" }, ["owner-1"])).toThrow(/no approval from the workspace owner/);
+    expect(() => assertOwnerApproval({ ...approval, approvedBy: "member-2" }, ["owner-1"])).toThrow(/Only the workspace owner/);
+    expect(() => assertOwnerApproval({ ...approval, approvedBy: "owner-1" }, [])).toThrow(/Only the workspace owner/);
+    expect(() => assertOwnerApproval({ ...approval, approvedBy: "owner-1" }, ["owner-1"])).not.toThrow();
+    expect(() => assertAiDisclosure(false)).toThrow(/AI label/);
+    expect(() => assertAiDisclosure(true)).not.toThrow();
+  });
+
   it("maps approval privacy and forces SELF_ONLY until the TikTok audit passes", () => {
     expect(tiktokPrivacy("public")).toBe("PUBLIC_TO_EVERYONE");
     expect(tiktokPrivacy("friends")).toBe("MUTUAL_FOLLOW_FRIENDS");
@@ -173,7 +186,7 @@ describe("posting rules", () => {
   });
 
   it("builds the Direct Post body with interactions off, AI label on, and commercial toggles", () => {
-    const body = buildTikTokDirectPostBody({ caption: "c", privacy: "SELF_ONLY", approval, aiGenerated: true, videoUrl: "https://v/x.mp4" });
+    const body = buildTikTokDirectPostBody({ caption: "c", privacy: "SELF_ONLY", approval, videoUrl: "https://v/x.mp4" });
     expect(body.post_info).toMatchObject({
       privacy_level: "SELF_ONLY",
       disable_comment: true,
@@ -188,7 +201,6 @@ describe("posting rules", () => {
       caption: "c",
       privacy: "PUBLIC_TO_EVERYONE",
       approval: { ...approval, allowComments: true, commercialDisclosure: true, commercialType: "your_brand" },
-      aiGenerated: true,
       videoUrl: "https://v/x.mp4",
       creator: { duet_disabled: true },
     });
@@ -198,7 +210,6 @@ describe("posting rules", () => {
         caption: "c",
         privacy: "SELF_ONLY",
         approval: { ...approval, commercialDisclosure: true, commercialType: "branded_content" },
-        aiGenerated: true,
         videoUrl: "https://v/x.mp4",
       }),
     ).toThrow(/branded content to be private/);
@@ -242,11 +253,13 @@ describe("live publishers (stubbed platform APIs)", () => {
   });
 
   it("Instagram Trial Reel: checks quota, creates a REELS container, waits for FINISHED, then publishes", async () => {
-    expect(buildReelContainer({ videoUrl: "u", caption: "c", trial: false, aiGenerated: false })).toEqual({
+    // The AI label is always on; there is no parameter to turn it off.
+    expect(buildReelContainer({ videoUrl: "u", caption: "c", trial: false })).toEqual({
       media_type: "REELS",
       video_url: "u",
       caption: "c",
       share_to_feed: true,
+      is_ai_generated: true,
     });
     let statusPolls = 0;
     stub((url) => {

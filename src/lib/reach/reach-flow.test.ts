@@ -59,7 +59,7 @@ async function setup(label: string, status: "approved" | "ready" = "approved") {
       status,
       aiGenerated: true,
       manifest,
-      approval: status === "approved" ? approval : null,
+      approval: status === "approved" ? { ...approval, approvedBy: user.id } : null,
       costActualUsd: 4.2,
     })
     .returning();
@@ -102,7 +102,7 @@ describe("hook experiments on Instagram Trial Reels", () => {
     const [b] = await db.select().from(hookVariants).where(and(eq(hookVariants.experimentId, experiment.id), eq(hookVariants.label, "B")));
     const [bVideo] = await db.select().from(videos).where(eq(videos.id, b!.videoId));
     expect(bVideo?.status).toBe("approved");
-    expect(bVideo?.approval).toMatchObject({ privacy: "public", musicConsent: true, scheduleConsent: true, creatorNickname: "Northwind" });
+    expect(bVideo?.approval).toMatchObject({ privacy: "public", musicConsent: true, scheduleConsent: true, creatorNickname: "Northwind", approvedBy: user.id });
 
     await expect(launchExperiment({ workspaceId: workspace.id, experimentId: experiment.id, accountId: tiktok.id, actor: user.id })).rejects.toThrow(
       /Instagram Trial Reels/,

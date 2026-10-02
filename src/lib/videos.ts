@@ -88,6 +88,8 @@ export async function approveVideo(input: {
     musicConsent: input.draft.musicConsent,
     scheduleConsent: input.draft.scheduleConsent,
     approvedAt: new Date().toISOString(),
+    // Publishing re-checks that this user is a workspace owner (src/lib/publish/rules.ts).
+    approvedBy: input.actor,
   };
   const manifest =
     video.manifest && typeof video.manifest === "object"

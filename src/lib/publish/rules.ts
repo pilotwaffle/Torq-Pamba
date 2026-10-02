@@ -23,6 +23,8 @@ export type ApprovalRecord = {
   aiGenerated?: unknown;
   musicConsent?: unknown;
   scheduleConsent?: unknown;
+  /** User id of whoever approved. Publishing needs it to be a workspace owner. */
+  approvedBy?: unknown;
 };
 
 /** Express consent captured on the approval screen is required before any upload starts. */
@@ -32,6 +34,31 @@ export function assertPublishConsent(approval: ApprovalRecord | null | undefined
   if (approval.scheduleConsent !== true) throw new PublishRuleError("Consent to post is missing from the approval.");
   const privacy = String(approval.privacy ?? "");
   if (!privacy) throw new PublishRuleError("The approval has no privacy choice. Privacy has no default.");
+}
+
+/**
+ * The owner must approve every post before it publishes. An approval with no
+ * approver, or one given by a member who is not an owner of the workspace,
+ * does not publish.
+ */
+export function assertOwnerApproval(approval: ApprovalRecord | null | undefined, ownerUserIds: string[]): void {
+  const approvedBy = approval && typeof approval === "object" ? approval.approvedBy : undefined;
+  if (typeof approvedBy !== "string" || !approvedBy) {
+    throw new PublishRuleError("This post has no approval from the workspace owner on record. Nothing was sent.");
+  }
+  if (!ownerUserIds.includes(approvedBy)) {
+    throw new PublishRuleError("Only the workspace owner can approve a post for publishing. Nothing was sent.");
+  }
+}
+
+/**
+ * Everything Torq-Pamba makes is AI-generated, so every publish carries the
+ * platform's AI label. There is no opt-out on the publish path.
+ */
+export function assertAiDisclosure(aiDisclosure: boolean): asserts aiDisclosure is true {
+  if (aiDisclosure !== true) {
+    throw new PublishRuleError("Every Torq-Pamba post is AI-generated and must carry the platform's AI label. Nothing was sent.");
+  }
 }
 
 export function tiktokPrivacy(privacy: string): TikTokPrivacy {

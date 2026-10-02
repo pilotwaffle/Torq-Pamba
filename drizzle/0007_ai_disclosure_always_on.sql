@@ -1,0 +1,1 @@
+ALTER TABLE "publish_attempts" ADD CONSTRAINT "publish_attempts_ai_disclosure_on" CHECK ("publish_attempts"."ai_disclosure" = true);

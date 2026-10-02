@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
-import { publishAttempts, publishEvents, publishingConnections, videos, type PublishTarget } from "@/db/schema";
+import { publishAttempts, publishEvents, publishingConnections, type PublishTarget } from "@/db/schema";
 import { handleOf } from "./accounts";
 import { asPlatform } from "./config";
 import { runPublishJob, type PublisherOverride } from "./dispatch";
@@ -8,7 +8,8 @@ import { runPublishJob, type PublisherOverride } from "./dispatch";
 /**
  * The publish queue is the foundation's `publish_attempts` table: one row per
  * target account, `pending` until the dispatcher claims it. Each row carries
- * `ai_disclosure`, copied from the video, which the dispatcher sends as the
+ * `ai_disclosure`, which is always true (everything Torq-Pamba makes is
+ * AI-generated; a database check enforces it). The dispatcher sends it as the
  * platform's AI-generated flag (TikTok `is_aigc`, Instagram `is_ai_generated`).
  */
 export async function enqueuePublishJobs(input: {
@@ -19,7 +20,6 @@ export async function enqueuePublishJobs(input: {
 }): Promise<string[]> {
   if (input.targets.length === 0) return [];
   const db = await getDb();
-  const [video] = await db.select({ aiGenerated: videos.aiGenerated }).from(videos).where(eq(videos.id, input.videoId)).limit(1);
   const accounts = await db
     .select({ id: publishingConnections.id, platform: publishingConnections.platform })
     .from(publishingConnections)
@@ -35,8 +35,8 @@ export async function enqueuePublishJobs(input: {
         connectionId: account.id,
         platform: asPlatform(account.platform),
         mode: target.mode,
-        // Disclosed unless the approver confirmed the video is not AI-generated.
-        aiDisclosure: video?.aiGenerated ?? true,
+        // Always on. There is no opt-out on the publish path.
+        aiDisclosure: true,
       },
     ];
   });

@@ -7,15 +7,16 @@ import { platformJson } from "./http";
 /** Instagram API with Instagram Login: Reels and Trial Reels via container → media_publish. */
 const graph = () => `https://graph.instagram.com/${graphVersion()}`;
 
-export function buildReelContainer(input: { videoUrl: string; caption: string; trial: boolean; aiGenerated: boolean }) {
+export function buildReelContainer(input: { videoUrl: string; caption: string; trial: boolean }) {
   return {
     media_type: "REELS",
     video_url: input.videoUrl,
     caption: input.caption,
     share_to_feed: !input.trial,
     ...(input.trial ? { trial_params: { graduation_strategy: "SS_PERFORMANCE" } } : {}),
-    // AI disclosure on by default. Field name per Meta's content-publishing page; verify before go-live.
-    ...(input.aiGenerated ? { is_ai_generated: true } : {}),
+    // AI disclosure is always on: every Torq-Pamba video is AI-generated. Field name per Meta's
+    // content-publishing page; verify before go-live.
+    is_ai_generated: true,
   };
 }
 
@@ -46,7 +47,7 @@ export const instagramPublisher: Publisher = {
     if (!quotaAllows(quota)) throw new PublishRuleError("Instagram's 24-hour publishing limit for this account is used up.");
     const container = (await platformJson(`${graph()}/${user}/media`, {
       json: {
-        ...buildReelContainer({ videoUrl: ctx.video.mediaUrl, caption: ctx.video.caption, trial: ctx.mode === "trial_reel", aiGenerated: ctx.video.aiGenerated }),
+        ...buildReelContainer({ videoUrl: ctx.video.mediaUrl, caption: ctx.video.caption, trial: ctx.mode === "trial_reel" }),
         access_token: token,
       },
     })) as { id?: string };

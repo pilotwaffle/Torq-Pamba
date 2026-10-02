@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { POST as cronTick } from "@/app/api/cron/tick/route";
 import { getDb } from "@/db";
-import { auditLog, publishAttempts, publishEvents, publishingConnections, scheduleItems, videos } from "@/db/schema";
+import { auditLog, members, publishAttempts, publishEvents, publishingConnections, scheduleItems, videos } from "@/db/schema";
 import { refreshMetrics, workspaceAnalytics } from "@/lib/analytics";
 import { signupAccount } from "@/lib/auth/account";
 import { cancel, processDueItems, reschedule, scheduleVideo } from "@/lib/schedule";
@@ -22,7 +22,7 @@ const manifest = {
   captions: [{ text: "Grab one on the way", startS: 0, endS: 30 }],
 };
 
-function approvalFor(privacy: string) {
+function approvalFor(privacy: string, approvedBy?: string) {
   return {
     creatorNickname: "Northwind",
     privacy,
@@ -34,6 +34,7 @@ function approvalFor(privacy: string) {
     aiGenerated: true,
     musicConsent: true,
     scheduleConsent: true,
+    ...(approvedBy ? { approvedBy } : {}),
   };
 }
 
@@ -42,7 +43,7 @@ async function setup(label: string, privacy = "public", title = "Oat-milk cold b
   const db = await getDb();
   const [video] = await db
     .insert(videos)
-    .values({ workspaceId: workspace.id, title, status: "approved", aiGenerated: true, manifest, approval: approvalFor(privacy) })
+    .values({ workspaceId: workspace.id, title, status: "approved", aiGenerated: true, manifest, approval: approvalFor(privacy, user.id) })
     .returning();
   return { workspace, user, video: video!, db };
 }
@@ -106,7 +107,7 @@ describe("publish flow (mock platforms)", () => {
     // Someone strips consent after scheduling: the TikTok job must refuse too.
     await db
       .update(videos)
-      .set({ approval: { ...approvalFor("only_me"), musicConsent: false } })
+      .set({ approval: { ...approvalFor("only_me", user.id), musicConsent: false } })
       .where(eq(videos.id, video.id));
     const tt = await runPublishJob(ttJob.id);
     expect(tt.error).toMatch(/Music usage/);
@@ -160,7 +161,7 @@ describe("publish flow (mock platforms)", () => {
     expect(job?.error).toMatch(/disconnected/);
   });
 
-  it("sets ai_disclosure from the video, sends it as the AI label, and never posts an AI-generated video without it", async () => {
+  it("always sets ai_disclosure, for every video, sends it as the AI label, and the database refuses to turn it off", async () => {
     const { workspace, user, video, db } = await setup("aidisclosure");
     const tiktok = await connectMockAccount({ workspaceId: workspace.id, platform: "tiktok", userId: user.id });
     const instagram = await connectMockAccount({ workspaceId: workspace.id, platform: "instagram", userId: user.id });
@@ -178,25 +179,79 @@ describe("publish flow (mock platforms)", () => {
     const ttEvents = await db.select().from(publishEvents).where(eq(publishEvents.jobId, ttJob.id));
     expect(ttEvents.find((event) => event.status === "submitted")?.detail).toMatchObject({ is_aigc: true });
 
-    // Someone clears the flag on an AI-generated video: the dispatcher refuses and sends nothing.
-    await db.update(publishAttempts).set({ aiDisclosure: false }).where(eq(publishAttempts.id, igJob.id));
-    const refused = await runPublishJob(igJob.id);
-    expect(refused.status).toBe("failed");
-    expect(refused.error).toMatch(/AI label/);
+    // No opt-out: clearing the flag on an attempt is rejected by the database check (migration 0007).
+    await expect(db.update(publishAttempts).set({ aiDisclosure: false }).where(eq(publishAttempts.id, igJob.id))).rejects.toThrow();
+    await expect(
+      db.insert(publishAttempts).values({ workspaceId: workspace.id, videoId: video.id, connectionId: instagram.id, platform: "instagram", mode: "reel", aiDisclosure: false }),
+    ).rejects.toThrow();
+    const [stillOn] = await db.select().from(publishAttempts).where(eq(publishAttempts.id, igJob.id));
+    expect(stillOn?.aiDisclosure).toBe(true);
+    expect((await runPublishJob(igJob.id)).status).toBe("succeeded");
     const igEvents = await db.select().from(publishEvents).where(eq(publishEvents.jobId, igJob.id));
-    expect(igEvents.map((event) => event.status)).toEqual(["processing", "failed"]);
+    expect(igEvents.find((event) => event.status === "submitted")?.detail).toMatchObject({ is_ai_generated: true });
 
-    // A video the approver confirmed is not AI-generated is queued without the flag and posted without the label.
+    // Even a video whose row says it is not AI-generated is queued and posted with the label.
     const plain = await setup("aidisclosure-off");
     await db.update(videos).set({ aiGenerated: false }).where(eq(videos.id, plain.video.id));
     const fb = await connectMockAccount({ workspaceId: plain.workspace.id, platform: "facebook", userId: plain.user.id });
     await scheduleVideo(plain.video.id, new Date(Date.now() - 1_000), plain.user.id, [{ accountId: fb.id, mode: "reel" }]);
     await processDueItems(new Date(), { workspaceId: plain.workspace.id });
     const [fbJob] = await db.select().from(publishAttempts).where(eq(publishAttempts.videoId, plain.video.id));
-    expect(fbJob?.aiDisclosure).toBe(false);
+    expect(fbJob?.aiDisclosure).toBe(true);
     expect((await runPublishJob(fbJob!.id)).status).toBe("succeeded");
     const fbEvents = await db.select().from(publishEvents).where(eq(publishEvents.jobId, fbJob!.id));
-    expect(fbEvents.find((event) => event.status === "submitted")?.detail).toMatchObject({ is_ai_generated: false });
+    expect(fbEvents.find((event) => event.status === "submitted")?.detail).toMatchObject({ is_ai_generated: true });
+  });
+
+  it("never publishes without an approval from the workspace owner on record", async () => {
+    const { workspace, user, video, db } = await setup("owner-approval");
+    const instagram = await connectMockAccount({ workspaceId: workspace.id, platform: "instagram", userId: user.id });
+    const enqueue = async () => {
+      await db.delete(publishAttempts).where(eq(publishAttempts.videoId, video.id));
+      const [job] = await db
+        .insert(publishAttempts)
+        .values({ workspaceId: workspace.id, videoId: video.id, connectionId: instagram.id, platform: "instagram", mode: "reel" })
+        .returning();
+      return job!;
+    };
+    const attempt = async (approval: Record<string, unknown> | null) => {
+      await db.update(videos).set({ approval }).where(eq(videos.id, video.id));
+      const job = await enqueue();
+      const result = await runPublishJob(job.id);
+      const events = await db.select().from(publishEvents).where(eq(publishEvents.jobId, job.id));
+      return { result, statuses: events.map((event) => event.status) };
+    };
+
+    // No approval at all.
+    const none = await attempt(null);
+    expect(none.result.status).toBe("failed");
+    expect(none.result.error).toMatch(/no approval from the workspace owner/);
+    expect(none.statuses).toEqual(["processing", "failed"]);
+
+    // Consent given, but no approver recorded.
+    const { approvedBy: _drop, ...anonymous } = approvalFor("public", user.id);
+    void _drop;
+    const unattributed = await attempt(anonymous);
+    expect(unattributed.result.error).toMatch(/no approval from the workspace owner/);
+    expect(unattributed.statuses).toEqual(["processing", "failed"]);
+
+    // Approved by a workspace member who is not the owner.
+    const other = await signupAccount({ email: email("owner-approval-member"), password, workspaceName: "Other Co" });
+    await db.insert(members).values({ workspaceId: workspace.id, userId: other.user.id, role: "member" });
+    const byMember = await attempt(approvalFor("public", other.user.id));
+    expect(byMember.result.error).toMatch(/Only the workspace owner/);
+    expect(byMember.statuses).toEqual(["processing", "failed"]);
+
+    // Approved by someone outside the workspace (the owner of a different one).
+    const outsider = await signupAccount({ email: email("owner-approval-outsider"), password, workspaceName: "Outside Co" });
+    const byOutsider = await attempt(approvalFor("public", outsider.user.id));
+    expect(byOutsider.result.error).toMatch(/Only the workspace owner/);
+    expect(byOutsider.statuses).toEqual(["processing", "failed"]);
+
+    // The owner's approval publishes.
+    const byOwner = await attempt(approvalFor("public", user.id));
+    expect(byOwner.result.status).toBe("succeeded");
+    expect(byOwner.statuses).toContain("submitted");
   });
 
   it("cron tick needs CRON_SECRET, then runs due items and the publish queue", async () => {
@@ -226,7 +281,8 @@ describe("analytics", () => {
     const tiktok = await connectMockAccount({ workspaceId: workspace.id, platform: "tiktok", userId: user.id });
     const instagram = await connectMockAccount({ workspaceId: workspace.id, platform: "instagram", userId: user.id });
     const draftVideo = (await setup("analytics-draft")).video;
-    await db.update(videos).set({ workspaceId: workspace.id }).where(eq(videos.id, draftVideo.id));
+    // Moved into this workspace, so its owner re-approves it (publishing needs this workspace's owner).
+    await db.update(videos).set({ workspaceId: workspace.id, approval: approvalFor("public", user.id) }).where(eq(videos.id, draftVideo.id));
     await scheduleVideo(video.id, new Date(Date.now() - 1_000), user.id, [
       { accountId: tiktok.id, mode: "direct" },
       { accountId: instagram.id, mode: "reel" },

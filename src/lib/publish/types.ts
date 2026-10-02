@@ -12,7 +12,8 @@ export type PublishContext = {
     title: string;
     durationS: number;
     caption: string;
-    aiGenerated: boolean;
+    /** Always true: every Torq-Pamba video is AI-generated and posts with the platform's AI label. */
+    aiGenerated: true;
     approval: ApprovalRecord;
     /** Absolute https URL of the rendered MP4. Required for live publishing. */
     mediaUrl: string | null;

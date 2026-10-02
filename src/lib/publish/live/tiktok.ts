@@ -29,7 +29,6 @@ export function buildTikTokDirectPostBody(input: {
   caption: string;
   privacy: TikTokPrivacy;
   approval: ApprovalRecord;
-  aiGenerated: boolean;
   videoUrl: string;
   creator?: CreatorInfo;
 }) {
@@ -45,7 +44,8 @@ export function buildTikTokDirectPostBody(input: {
       disable_stitch: input.approval.allowStitch !== true || input.creator?.stitch_disabled === true,
       brand_content_toggle: branded,
       brand_organic_toggle: ownBrand,
-      is_aigc: input.aiGenerated,
+      // Always on: every Torq-Pamba video is AI-generated. There is no input that turns it off.
+      is_aigc: true,
     },
     source_info: { source: "PULL_FROM_URL", video_url: input.videoUrl },
   };
@@ -96,7 +96,6 @@ export const tiktokPublisher: Publisher = {
         caption: ctx.video.caption,
         privacy: effective.privacy,
         approval: ctx.video.approval,
-        aiGenerated: ctx.video.aiGenerated,
         videoUrl: ctx.video.mediaUrl,
         creator,
       });
