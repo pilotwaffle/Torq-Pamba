@@ -6,8 +6,20 @@ export type ChatToolContext = {
   userId: string;
   /** The user's message, trimmed and capped at 2,000 characters. */
   text: string;
-  /** Stores an assistant message in this workspace's chat. */
+  /** Stores an assistant message in this workspace's chat. A numeric `data.costUsd` is recorded as the call's cost. */
   reply(content: string, data: Record<string, unknown>): Promise<void>;
+};
+
+/** What the chat shows before a tool with `confirm` runs. */
+export type ToolConfirmation = {
+  title: string;
+  lines?: string[];
+  costUsd?: number;
+  /** Statements the user must tick before Confirm is enabled, such as consents. */
+  acknowledgements?: string[];
+  confirmLabel?: string;
+  /** Arguments to run with once confirmed (for example "latest plan" resolved to an id). Defaults to the call's arguments. */
+  args?: Record<string, unknown>;
 };
 
 type ToolSpec<S extends z.ZodType> = {
@@ -23,6 +35,12 @@ type ToolSpec<S extends z.ZodType> = {
    * trailing punctuation removed. Return the tool's arguments, or null.
    */
   match(text: string): z.input<S> | null;
+  /**
+   * Set on tools that spend money or credits or act for the user. The agent shows the
+   * result and runs the tool only after the user confirms in the chat; callers of
+   * `run` outside the agent must get the same confirmation first. Throw to refuse early.
+   */
+  confirm?(ctx: ChatToolContext, args: z.output<S>): Promise<ToolConfirmation>;
   run(ctx: ChatToolContext, args: z.output<S>): Promise<void>;
 };
 
@@ -34,10 +52,12 @@ export type ChatTool = {
   priority: number;
   match(text: string): unknown;
   parse(args: unknown): Record<string, unknown>;
+  confirm?(ctx: ChatToolContext, args: unknown): Promise<ToolConfirmation>;
   run(ctx: ChatToolContext, args: unknown): Promise<void>;
 };
 
 export function defineTool<S extends z.ZodType<Record<string, unknown>>>(spec: ToolSpec<S>): ChatTool {
+  const confirm = spec.confirm;
   return {
     name: spec.name,
     description: spec.description,
@@ -45,6 +65,7 @@ export function defineTool<S extends z.ZodType<Record<string, unknown>>>(spec: T
     priority: spec.priority,
     match: (text) => spec.match(text),
     parse: (args) => spec.parameters.parse(args),
+    ...(confirm ? { confirm: (ctx: ChatToolContext, args: unknown) => confirm(ctx, spec.parameters.parse(args)) } : {}),
     run: (ctx, args) => spec.run(ctx, spec.parameters.parse(args)),
   };
 }
