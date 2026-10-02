@@ -110,7 +110,7 @@ export async function getVideoOp(principal: Principal, input: unknown): Promise<
       hook: manifest?.hook ?? null,
       durationS: manifest?.totalDurationS ?? null,
       captions: manifest?.captions ?? [],
-      hasRenderedMp4: Boolean(video.mediaKey),
+      hasRenderedMp4: Boolean(video.currentRenderId),
       publishJobs: jobs.map((job) => ({ platform: job.platform, mode: job.mode, status: job.status, privacy: job.privacy })),
     },
   };

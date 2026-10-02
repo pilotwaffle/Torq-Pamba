@@ -18,6 +18,7 @@ import { enqueuePublishJobs } from "@/lib/publish/queue";
 import { parseManifest } from "@/lib/router";
 import { approveVideo, getWorkspaceVideo } from "@/lib/videos";
 import { captionsWithHook, generateHookVariants, hookPolicyIssues } from "./hooks";
+import { queueVariantRender } from "./render";
 import { addTile, provenHooks } from "./knowledge";
 
 /**
@@ -164,6 +165,8 @@ export async function createHookExperiment(input: {
         .returning({ id: videos.id });
       if (!row) throw new ExperimentError("Could not create a variant");
       videoId = row.id;
+      // Re-cut through the wave 1 render API with the base clips and the new hook.
+      await queueVariantRender({ baseVideoId: base.id, variantVideoId: row.id, manifest: variantManifest });
     }
     await db.insert(hookVariants).values({
       experimentId: experiment.id,

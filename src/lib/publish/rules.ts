@@ -25,6 +25,8 @@ export type ApprovalRecord = {
   scheduleConsent?: unknown;
   /** User id of whoever approved. Publishing needs it to be a workspace owner. */
   approvedBy?: unknown;
+  /** The video_renders row the approver saw. Publishing sends that render's MP4. */
+  approvedRenderId?: unknown;
 };
 
 /** Express consent captured on the approval screen is required before any upload starts. */

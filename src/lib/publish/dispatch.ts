@@ -1,7 +1,8 @@
 import { and, eq, gte, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
-import { members, publishAttempts, publishEvents, publishingConnections, videos } from "@/db/schema";
+import { members, publishAttempts, publishEvents, publishingConnections, videoRenders, videos } from "@/db/schema";
 import { writeAudit } from "@/lib/audit";
+import { publicPullUrl } from "@/lib/media/pull";
 import { parseManifest } from "@/lib/router";
 import { accessTokenOf, handleOf } from "./accounts";
 import { asPlatform, isPublishLive, tiktokAudited, type Platform } from "./config";
@@ -59,6 +60,24 @@ async function ownerUserIds(workspaceId: string): Promise<string[]> {
     .from(members)
     .where(and(eq(members.workspaceId, workspaceId), eq(members.role, "owner")));
   return rows.map((row) => row.userId);
+}
+
+/**
+ * Signed pull URL of the render the owner approved (not whatever is current),
+ * or null when there is none, it is not ready, or PUBLIC_BASE_URL is not https.
+ * Live publishers refuse to start without it.
+ */
+export async function approvedMediaUrl(videoId: string, approval: ApprovalRecord | null, now = new Date()): Promise<string | null> {
+  const renderId = typeof approval?.approvedRenderId === "string" ? approval.approvedRenderId : "";
+  if (!renderId) return null;
+  const db = await getDb();
+  const [render] = await db
+    .select({ videoId: videoRenders.videoId, status: videoRenders.status, outputAssetId: videoRenders.outputAssetId })
+    .from(videoRenders)
+    .where(eq(videoRenders.id, renderId))
+    .limit(1);
+  if (!render || render.videoId !== videoId || render.status !== "ready" || !render.outputAssetId) return null;
+  return publicPullUrl(render.outputAssetId, { now });
 }
 
 async function recentTikTokAccounts(now: Date): Promise<string[]> {
@@ -130,9 +149,7 @@ export async function runPublishJob(
         caption: postCaption({ hook: manifest?.hook ?? "", title: video.title, captions: (manifest?.captions ?? []).map((c) => c.text) }),
         aiGenerated: true,
         approval: approval ?? {},
-        // Wave 1 merge: the old media_key files are gone. The follow-up commit points this at the
-        // current render. Until then live publishers refuse (no MP4 URL); mock publishing is unaffected.
-        mediaUrl: null,
+        mediaUrl: await approvedMediaUrl(video.id, approval, now),
       },
       audited: tiktokAudited(),
       recentTikTokAccountIds: recent,

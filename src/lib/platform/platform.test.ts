@@ -65,7 +65,10 @@ describe("API keys", () => {
     const [row] = await db.select().from(apiKeys).where(eq(apiKeys.id, credential.id));
     expect(row!.keyHash).toBe(hashSecret(key));
     expect(row).toMatchObject({ kind: "key", prefix: credential.prefix, scopes: ["read"], readOnly: true, maxCredits: null, createdBy: user.id });
-    expect(JSON.stringify(row)).not.toContain(key.split("_")[2]);
+    // The secret is everything after "tpk_<8 hex>_" (base64url, so it may itself contain "_").
+    const secretPart = key.slice(credential.prefix.length + 1);
+    expect(secretPart).toHaveLength(43);
+    expect(JSON.stringify(row)).not.toContain(secretPart);
     expect(await authenticate(key)).toMatchObject({ workspaceId: workspace.id, scope: "read", kind: "key", grantId: credential.id });
     expect(await authenticate(`${key.slice(0, -1)}x`)).toBeNull();
     expect(await authenticate("not-a-key")).toBeNull();

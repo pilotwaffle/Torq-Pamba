@@ -218,8 +218,6 @@ export const videos = pgTable(
     costActualUsd: money("cost_actual_usd"),
     aiGenerated: boolean("ai_generated").notNull().default(true),
     manifest: jsonb("manifest").$type<Record<string, unknown>>(),
-    /** Storage key of the stitched MP4, when live providers returned real clips. */
-    mediaKey: text("media_key"),
     approval: jsonb("approval").$type<Record<string, unknown>>(),
     /** The stitched mp4 shown and published for this video. */
     currentRenderId: uuid("current_render_id").references((): AnyPgColumn => videoRenders.id, {

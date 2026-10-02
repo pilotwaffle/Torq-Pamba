@@ -3,9 +3,24 @@ import path from "node:path";
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { getDb } from "@/db";
-import { adHandoffs, auditLog, hookExperiments, hookVariants, knowledgeItems, publishAttempts, videos, workspaces } from "@/db/schema";
+import {
+  adHandoffs,
+  auditLog,
+  hookExperiments,
+  hookVariants,
+  knowledgeItems,
+  publishAttempts,
+  sceneTakes,
+  videoRenders,
+  videoScenes,
+  videos,
+  workspaces,
+} from "@/db/schema";
 import { refreshMetrics } from "@/lib/analytics";
 import { signupAccount } from "@/lib/auth/account";
+import { processJobs } from "@/lib/jobs/worker";
+import { storeMedia } from "@/lib/media/assets";
+import { MOCK_CLIP_FIXTURE } from "@/lib/media/mock-clip";
 import { connectMockAccount } from "@/lib/publish/accounts";
 import { openToken } from "@/lib/publish/crypto";
 import { processPublishQueue } from "@/lib/publish/queue";
@@ -87,6 +102,50 @@ describe("hook experiments on Instagram Trial Reels", () => {
     await expect(createHookExperiment({ workspace: unapproved.workspace, baseVideoId: unapproved.video.id, count: 3, actor: "u" })).rejects.toThrow(
       /Approve the video before testing hooks/,
     );
+  });
+
+  it("re-cuts each variant through the render API from the base clips, and renders nothing for a base without clips", async () => {
+    const { workspace, user, video, db } = await setup("hx-render");
+    const clip = await storeMedia({
+      workspaceId: workspace.id,
+      kind: "video",
+      source: "generated",
+      bytes: await readFile(MOCK_CLIP_FIXTURE),
+      mimeType: "video/mp4",
+    });
+    for (const [position, scene] of manifest.scenes.entries()) {
+      const [row] = await db
+        .insert(videoScenes)
+        .values({ videoId: video.id, position, visual: scene.visual, line: scene.line, durationMs: 2_000 })
+        .returning();
+      const [take] = await db.insert(sceneTakes).values({ sceneId: row!.id, number: 1, status: "ready", clipAssetId: clip.id, durationMs: 2_000 }).returning();
+      await db.update(videoScenes).set({ selectedTakeId: take!.id }).where(eq(videoScenes.id, row!.id));
+    }
+    const experiment = await createHookExperiment({ workspace, baseVideoId: video.id, count: 2, actor: user.id });
+    const [b] = await db.select().from(hookVariants).where(and(eq(hookVariants.experimentId, experiment.id), eq(hookVariants.label, "B")));
+    const copied = await db
+      .select({ clip: sceneTakes.clipAssetId })
+      .from(videoScenes)
+      .innerJoin(sceneTakes, eq(sceneTakes.id, videoScenes.selectedTakeId))
+      .where(eq(videoScenes.videoId, b!.videoId));
+    expect(copied.map((row) => row.clip)).toEqual([clip.id, clip.id, clip.id]);
+    const [queued] = await db.select().from(videoRenders).where(eq(videoRenders.videoId, b!.videoId));
+    expect(queued?.status).toBe("queued");
+
+    await processJobs({ videoId: b!.videoId });
+    const [rendered] = await db.select().from(videoRenders).where(eq(videoRenders.videoId, b!.videoId));
+    expect(rendered?.status).toBe("ready");
+    expect(rendered?.outputAssetId).toBeTruthy();
+    expect((rendered?.manifest as { hook?: string }).hook).toBe(b!.hook);
+    const [bVideo] = await db.select().from(videos).where(eq(videos.id, b!.videoId));
+    // The render does not touch the variant's review state.
+    expect(bVideo).toMatchObject({ status: "ready", currentRenderId: rendered!.id });
+
+    // A base made before the render pipeline has no clips: the variant stays a manifest and nothing is queued.
+    const legacy = await setup("hx-render-legacy");
+    const legacyExperiment = await createHookExperiment({ workspace: legacy.workspace, baseVideoId: legacy.video.id, count: 2, actor: legacy.user.id });
+    const [legacyB] = await db.select().from(hookVariants).where(and(eq(hookVariants.experimentId, legacyExperiment.id), eq(hookVariants.label, "B")));
+    expect(await db.select().from(videoRenders).where(eq(videoRenders.videoId, legacyB!.videoId))).toEqual([]);
   });
 
   it("needs explicit variant approval and an Instagram account before launch", async () => {

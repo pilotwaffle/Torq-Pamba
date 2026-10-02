@@ -13,7 +13,7 @@ These are the rules every change to Torq-Pamba is held to. Reviewers block on th
 
 - `PROVIDER_MODE=mock` and `PUBLISH_MODE=mock` are the defaults. Live vendor or platform calls need the mode flag **and** the key **and** `NODE_ENV !== "test"` (`isLive`, `isPublishLive`).
 - No paid API key is required to build, test, or demo the app.
-- Live adapters must poll to completion (`pollUntil`), download output (`downloadClip`), and store it (`saveMedia`). A "started" job is not a finished clip.
+- Live clip adapters implement `submitClip` + `pollClip` and run through the job runner (`src/lib/jobs`), which downloads the output into media assets and renders the MP4. A "started" job is not a finished clip.
 
 ## 3. Fail closed
 

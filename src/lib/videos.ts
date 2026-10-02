@@ -90,6 +90,8 @@ export async function approveVideo(input: {
     approvedAt: new Date().toISOString(),
     // Publishing re-checks that this user is a workspace owner (src/lib/publish/rules.ts).
     approvedBy: input.actor,
+    // The render the approver saw. Publishing sends exactly this one, even if the video is re-rendered later.
+    approvedRenderId: video.currentRenderId ?? null,
   };
   const manifest =
     video.manifest && typeof video.manifest === "object"

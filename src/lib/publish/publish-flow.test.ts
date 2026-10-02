@@ -1,15 +1,22 @@
+import { readFile } from "node:fs/promises";
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { POST as cronTick } from "@/app/api/cron/tick/route";
 import { getDb } from "@/db";
-import { auditLog, members, publishAttempts, publishEvents, publishingConnections, scheduleItems, videos } from "@/db/schema";
+import { auditLog, members, publishAttempts, publishEvents, publishingConnections, scheduleItems, videoRenders, videos } from "@/db/schema";
+import { EMPTY_APPROVAL } from "@/lib/approval";
+import { storeMedia } from "@/lib/media/assets";
+import { MOCK_CLIP_FIXTURE } from "@/lib/media/mock-clip";
+import { verifyPull } from "@/lib/media/pull";
+import { approveVideo } from "@/lib/videos";
 import { refreshMetrics, workspaceAnalytics } from "@/lib/analytics";
 import { signupAccount } from "@/lib/auth/account";
 import { cancel, processDueItems, reschedule, scheduleVideo } from "@/lib/schedule";
 import { accessTokenOf, connectMockAccount, disconnectAccount, listAccounts, MOCK_TOKEN_MARKER, REVOKED_TOKEN_MARKER } from "./accounts";
-import { runPublishJob } from "./dispatch";
+import { approvedMediaUrl, runPublishJob } from "./dispatch";
 import { tiktokPublisher, TIKTOK_ENDPOINTS } from "./live/tiktok";
 import { processPublishQueue } from "./queue";
+import type { PublishContext } from "./types";
 
 const password = "correct-horse-battery";
 const email = (label: string) => `${label}-${Date.now()}-${Math.random().toString(16).slice(2)}@example.com`;
@@ -50,6 +57,7 @@ async function setup(label: string, privacy = "public", title = "Oat-milk cold b
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe("publish flow (mock platforms)", () => {
@@ -252,6 +260,66 @@ describe("publish flow (mock platforms)", () => {
     const byOwner = await attempt(approvalFor("public", user.id));
     expect(byOwner.result.status).toBe("succeeded");
     expect(byOwner.statuses).toContain("submitted");
+  });
+
+  it("approval records the render the owner saw, and publishing sends a signed pull URL for exactly that render", async () => {
+    vi.stubEnv("PUBLIC_BASE_URL", "https://studio.example.com");
+    const { workspace, user, db } = await setup("approved-render");
+    const bytes = await readFile(MOCK_CLIP_FIXTURE);
+    const renderOf = async (videoId: string) => {
+      const asset = await storeMedia({ workspaceId: workspace.id, kind: "video", source: "render", bytes, mimeType: "video/mp4" });
+      const [render] = await db.insert(videoRenders).values({ videoId, status: "ready", outputAssetId: asset.id }).returning();
+      return { asset, render: render! };
+    };
+    const [ready] = await db
+      .insert(videos)
+      .values({ workspaceId: workspace.id, title: "Rendered", status: "ready", aiGenerated: true, manifest })
+      .returning();
+    const first = await renderOf(ready!.id);
+    await db.update(videos).set({ currentRenderId: first.render.id }).where(eq(videos.id, ready!.id));
+    await approveVideo({
+      workspace,
+      actor: user.id,
+      videoId: ready!.id,
+      draft: { ...EMPTY_APPROVAL, creatorNickname: "Northwind", privacy: "public", aiGenerated: true, musicConsent: true, scheduleConsent: true },
+    });
+    const [approved] = await db.select().from(videos).where(eq(videos.id, ready!.id));
+    expect(approved?.approval).toMatchObject({ approvedBy: user.id, approvedRenderId: first.render.id });
+
+    // The editor re-renders after approval: the post still uses the approved render.
+    const second = await renderOf(ready!.id);
+    await db.update(videos).set({ currentRenderId: second.render.id }).where(eq(videos.id, ready!.id));
+
+    const instagram = await connectMockAccount({ workspaceId: workspace.id, platform: "instagram", userId: user.id });
+    const seen: (string | null)[] = [];
+    const capture = {
+      async publish(ctx: PublishContext) {
+        seen.push(ctx.video.mediaUrl);
+        return { externalId: "ig-1", mode: ctx.mode, privacy: "PUBLIC" };
+      },
+      async metrics() {
+        return {};
+      },
+    };
+    const [job] = await db
+      .insert(publishAttempts)
+      .values({ workspaceId: workspace.id, videoId: ready!.id, connectionId: instagram.id, platform: "instagram", mode: "reel" })
+      .returning();
+    expect((await runPublishJob(job!.id, { publishers: { instagram: capture } })).status).toBe("succeeded");
+    const url = new URL(seen[0]!);
+    expect(url.origin + url.pathname).toBe(`https://studio.example.com/api/media/${first.asset.id}/pull`);
+    expect(verifyPull(first.asset.id, url.searchParams.get("exp"), url.searchParams.get("sig"))).toBe(true);
+
+    // With no approved render on record there is no MP4 URL, so live publishers cannot start.
+    expect(await approvedMediaUrl(ready!.id, { approvedRenderId: null })).toBeNull();
+    expect(await approvedMediaUrl(ready!.id, { approvedRenderId: second.render.id })).not.toBeNull();
+    // A render of another video is never sent.
+    const [other] = await db.insert(videos).values({ workspaceId: workspace.id, title: "Other", status: "ready" }).returning();
+    const foreign = await renderOf(other!.id);
+    expect(await approvedMediaUrl(ready!.id, { approvedRenderId: foreign.render.id })).toBeNull();
+    // And not without an https PUBLIC_BASE_URL.
+    vi.stubEnv("PUBLIC_BASE_URL", "http://localhost:3000");
+    expect(await approvedMediaUrl(ready!.id, { approvedRenderId: first.render.id })).toBeNull();
   });
 
   it("cron tick needs CRON_SECRET, then runs due items and the publish queue", async () => {
