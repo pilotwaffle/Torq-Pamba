@@ -51,3 +51,7 @@ export const llmProviders: LlmProvider[] = registry.list("llm");
 export function videoProvider(id: string): VideoProvider {
   return registry.get("video", id);
 }
+
+export function renderProvider(id = "ffmpeg") {
+  return registry.get("render", id);
+}

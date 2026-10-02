@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { catalog } from "@/lib/models";
 import { catalogVideoProvider } from "./catalog";
-import { mockGenerateClip } from "./mock";
-import { createRegistry, imageProviders, llmProviders, registry, videoProvider, videoProviders } from "./registry";
+import { mockPollClip, mockSubmitClip } from "./mock";
+import { createRegistry, imageProviders, llmProviders, registry, renderProvider, videoProvider, videoProviders } from "./registry";
 import { defineAdapter, ProviderUnavailableError, type VideoProvider } from "./types";
 
 function fakeVideo(id: string): VideoProvider {
@@ -13,7 +13,8 @@ function fakeVideo(id: string): VideoProvider {
     tier: "standard",
     pricePerSecondUsd: 0.01,
     maxDurationS: 10,
-    generateClip: (req) => mockGenerateClip(id, 0.01, req),
+    submitClip: (req) => mockSubmitClip(id, req),
+    pollClip: (_jobId, req) => mockPollClip(id, req),
   };
 }
 
@@ -45,7 +46,8 @@ describe("provider registry", () => {
       "gemini-3.8-flash",
       "grok-4.7",
     ]);
-    expect(registry.adapters.map((adapter) => adapter.id)).toEqual(["google", "heygen", "kling", "llm", "runway", "xai"]);
+    expect(registry.adapters.map((adapter) => adapter.id)).toEqual(["ffmpeg", "google", "heygen", "kling", "llm", "runway", "xai"]);
+    expect(renderProvider().id).toBe("ffmpeg");
   });
 
   it("resolves by id and rejects unknown ids", () => {
@@ -57,8 +59,8 @@ describe("provider registry", () => {
     const extra = defineAdapter({ id: "fake", video: [fakeVideo("fake-video")] });
     const extended = createRegistry([...registry.adapters, extra]);
     expect(extended.list("video")).toHaveLength(videoProviders.length + 1);
-    const clip = await extended.get("video", "fake-video").generateClip({ prompt: "hi", durationS: 5 });
-    expect(clip).toMatchObject({ providerId: "fake-video", costUsd: 0.05 });
+    const job = await extended.get("video", "fake-video").submitClip({ prompt: "hi", durationS: 1 });
+    expect(job.providerJobId).toMatch(/^mock:fake-video:/);
   });
 
   it("refuses duplicate adapter or provider ids", () => {
@@ -76,11 +78,15 @@ describe("provider registry", () => {
   it("mocks catalog providers when no keys are set", async () => {
     const provider = catalogVideoProvider("veo-3.1-lite", {
       envKeys: ["DEFINITELY_UNSET_KEY"],
-      live: () => Promise.reject(new Error("must not call live")),
+      live: {
+        submit: () => Promise.reject(new Error("must not call live")),
+        poll: () => Promise.reject(new Error("must not call live")),
+      },
     });
-    const clip = await provider.generateClip({ prompt: "a kitchen", durationS: 4 });
-    expect(clip.providerId).toBe("veo-3.1-lite");
-    expect(clip.costUsd).toBeCloseTo(0.2, 10);
-    expect(clip.frameUrls[0]).toMatch(/^data:image\/svg\+xml/);
+    const job = await provider.submitClip({ prompt: "a kitchen", durationS: 1 });
+    expect(job.providerJobId).toMatch(/^mock:veo-3\.1-lite:/);
+    const done = await provider.pollClip(job.providerJobId, { prompt: "a kitchen", durationS: 1 });
+    expect(done.state).toBe("succeeded");
+    if (done.state === "succeeded") expect(done.frameUrl).toMatch(/^data:image\/svg\+xml/);
   });
 });

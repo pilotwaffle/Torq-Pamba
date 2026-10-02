@@ -70,6 +70,7 @@ export async function generateFromMessage(input: {
       hook,
       voiceLines: plan.scenes.map((scene) => scene.line),
       scenes: plan.scenes,
+      notifyUserId: input.userId,
     });
   } catch (error) {
     if (error instanceof BudgetExceededError) return { ok: false, error: error.message };
@@ -81,6 +82,12 @@ export async function generateFromMessage(input: {
     .update(chatMessages)
     .set({ data: { kind: "plan", plan: { ...plan, tier: input.tier }, generatedVideoId: result.videoId } })
     .where(eq(chatMessages.id, message.id));
+  if (result.pending) {
+    await insertAssistant(input.workspaceId, input.userId, "The clip is still generating. I'll post here when the final video is ready.", {
+      kind: "note",
+    });
+    return { ok: true, videoId: result.videoId };
+  }
   await insertAssistant(input.workspaceId, input.userId, "The clip finished generating.", {
     kind: "ready",
     videoId: result.videoId,
