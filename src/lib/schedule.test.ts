@@ -192,28 +192,38 @@ describe("cron auth", () => {
     }
   });
 
-  it("allows the tick when CRON_SECRET is unset", async () => {
+  // Changed in phase 2 (operator requirement): the tick fails closed when CRON_SECRET is unset.
+  it("refuses the tick when CRON_SECRET is unset", async () => {
     const previous = process.env.CRON_SECRET;
     delete process.env.CRON_SECRET;
     try {
-      expect(cronAuthorized("Bearer anything")).toBe(true);
-      const open = await cronTick(new Request("http://localhost/api/cron/tick", { method: "POST" }));
-      expect(open.status).toBe(200);
+      expect(cronAuthorized("Bearer anything")).toBe(false);
+      expect(cronAuthorized(null)).toBe(false);
+      const closed = await cronTick(new Request("http://localhost/api/cron/tick", { method: "POST" }));
+      expect(closed.status).toBe(503);
+      const blank = await cronTick(
+        new Request("http://localhost/api/cron/tick", { method: "POST", headers: { authorization: "Bearer " } }),
+      );
+      expect(blank.status).toBe(503);
     } finally {
       await restoreEnv("CRON_SECRET", previous);
     }
   });
 });
 
+// Changed in phase 2: official-API publishing exists now, so the forbidden endpoints may appear
+// ONLY inside src/lib/publish/live/ (reachable solely through the gated dispatcher). Every other
+// file under src/ is still scanned, with one extra needle that also catches templated TikTok URLs.
 describe("publish endpoints", () => {
-  it("keeps the queue banner and finds no forbidden publish endpoints under src/", async () => {
-    expect(SCHEDULE_BANNER).toContain("Ready to publish manually");
-    const root = path.join(process.cwd(), "src");
-    const needles = [
-      "open.tiktokapis.com/v2/post/" + "publish",
-      "media_" + "publish",
-      "video_" + "reels",
-    ];
+  const LIVE_DIR = path.join("lib", "publish", "live");
+  const needles = [
+    "open.tiktokapis.com/v2/post/" + "publish",
+    "/post/" + "publish/",
+    "media_" + "publish",
+    "video_" + "reels",
+  ];
+
+  async function scan(root: string) {
     const hits: string[] = [];
     async function walk(dir: string) {
       const entries = await readdir(dir, { withFileTypes: true });
@@ -230,6 +240,40 @@ describe("publish endpoints", () => {
       }
     }
     await walk(root);
-    expect(hits).toEqual([]);
+    return hits;
+  }
+
+  it("keeps the queue banner and finds no publish endpoints under src/ outside the gated live publishers", async () => {
+    expect(SCHEDULE_BANNER).toContain("Ready to publish manually");
+    expect(SCHEDULE_BANNER).toContain("never posts from devices");
+    const root = path.join(process.cwd(), "src");
+    const hits = await scan(root);
+    const outside = hits.filter((hit) => !hit.startsWith(`${LIVE_DIR}${path.sep}`));
+    expect(outside).toEqual([]);
+    // The allowlist is not vacuous: the live publishers really are the ones holding the endpoints.
+    expect(hits.some((hit) => hit.startsWith(path.join(LIVE_DIR, "tiktok.ts")))).toBe(true);
+    expect(hits.some((hit) => hit.startsWith(path.join(LIVE_DIR, "instagram.ts")))).toBe(true);
+    expect(hits.some((hit) => hit.startsWith(path.join(LIVE_DIR, "facebook.ts")))).toBe(true);
+  });
+
+  it("only the dispatcher, account linking and analytics import the live publishers", async () => {
+    const root = path.join(process.cwd(), "src");
+    const importers: string[] = [];
+    async function walk(dir: string) {
+      for (const entry of await readdir(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          await walk(full);
+          continue;
+        }
+        if (entry.name.endsWith(".test.ts")) continue;
+        const rel = path.relative(root, full);
+        if (rel.startsWith(LIVE_DIR)) continue;
+        const text = await readFile(full, "utf8");
+        if (/from\s+["'](?:\.\/live\/|[^"']*publish\/live\/)/.test(text)) importers.push(rel.split(path.sep).join("/"));
+      }
+    }
+    await walk(root);
+    expect(importers.sort()).toEqual(["lib/analytics/index.ts", "lib/publish/accounts.ts", "lib/publish/dispatch.ts"]);
   });
 });

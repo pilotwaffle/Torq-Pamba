@@ -6,6 +6,10 @@ import { SchedulePanel } from "@/components/schedule-panel";
 import { PageHeader, StatusBadge, cardClass, statusLabel } from "@/components/ui";
 import { requireWorkspace } from "@/lib/auth/guards";
 import { PRIVACY_OPTIONS } from "@/lib/approval";
+import { listAccounts } from "@/lib/publish/accounts";
+import { PLATFORM_LABEL, PLATFORM_MODES } from "@/lib/publish/config";
+import { listPublishJobs, publishStatusLabel } from "@/lib/publish/queue";
+import { mediaUrlPath } from "@/lib/media/storage";
 import { activeItemForVideo, formatWhen } from "@/lib/schedule";
 import { attemptSummaryFor, getWorkspaceVideo, manifestOf } from "@/lib/videos";
 
@@ -33,7 +37,14 @@ export default async function VideoPage({
   const queued = await activeItemForVideo(video.id);
   const whenLabel = queued ? formatWhen(queued.scheduledAt, workspace.timezone) : "";
   const queueMode =
-    queued?.status === "scheduled" ? "scheduled" : queued?.status === "due_manual" ? "due" : "open";
+    queued?.status === "scheduled"
+      ? "scheduled"
+      : queued?.status === "due_manual"
+        ? "due"
+        : queued?.status === "publishing"
+          ? "publishing"
+          : "open";
+  const [accounts, jobs] = await Promise.all([listAccounts(workspace.id), listPublishJobs(workspace.id, video.id)]);
   const showSchedule = video.status === "approved" || video.status === "scheduled";
 
   return (
@@ -51,6 +62,8 @@ export default async function VideoPage({
           <StatusBadge status="scheduled">Scheduled</StatusBadge>
         ) : queueMode === "due" ? (
           <StatusBadge status="due_manual">Ready to publish manually</StatusBadge>
+        ) : queueMode === "publishing" ? (
+          <StatusBadge status="scheduled">Sent to publisher</StatusBadge>
         ) : (
           <StatusBadge status={video.status}>{statusLabel(video.status)}</StatusBadge>
         )}
@@ -90,7 +103,45 @@ export default async function VideoPage({
               </dl>
             </section>
           ) : null}
-          {showSchedule ? <SchedulePanel videoId={video.id} mode={queueMode} whenLabel={whenLabel} /> : null}
+          {showSchedule ? <SchedulePanel videoId={video.id} mode={queueMode} whenLabel={whenLabel} accounts={accounts} /> : null}
+          {video.mediaKey ? (
+            <section className={`${cardClass} p-4 text-sm`} aria-label="Rendered video">
+              <h2 className="text-lg font-semibold">Rendered MP4</h2>
+              <video controls className="mt-3 w-full max-w-xs rounded-lg" src={mediaUrlPath(video.mediaKey)} />
+            </section>
+          ) : null}
+          {jobs.length > 0 ? (
+            <section className={`${cardClass} overflow-x-auto p-4 text-sm`} aria-labelledby="publish-status-heading">
+              <h2 id="publish-status-heading" className="text-lg font-semibold">
+                Publish status
+              </h2>
+              <table className="mt-3 w-full" aria-label="Publish status">
+                <thead>
+                  <tr className="border-b border-zinc-200 text-left">
+                    <th scope="col" className="py-2 pr-3 font-medium">Account</th>
+                    <th scope="col" className="py-2 pr-3 font-medium">Format</th>
+                    <th scope="col" className="py-2 pr-3 font-medium">Status</th>
+                    <th scope="col" className="py-2 font-medium">Detail</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {jobs.map((job) => (
+                    <tr key={job.id} className="border-b border-zinc-100 last:border-b-0">
+                      <td className="py-2 pr-3">
+                        {PLATFORM_LABEL[job.platform]} {job.handle}
+                        {job.accountMode === "mock" ? " (mock)" : ""}
+                      </td>
+                      <td className="py-2 pr-3">
+                        {PLATFORM_MODES[job.platform].find((option) => option.value === job.mode)?.label ?? job.mode}
+                      </td>
+                      <td className="py-2 pr-3">{publishStatusLabel(job.status, job.privacy)}</td>
+                      <td className="py-2 text-zinc-600">{job.lastError ?? job.externalId ?? ""}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          ) : null}
         </div>
       </div>
     </main>

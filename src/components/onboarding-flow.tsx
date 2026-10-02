@@ -116,7 +116,12 @@ export function OnboardingFlow({
       ) : null}
       {current === 5 ? (
         <form action={finishOnboardingAction} className="mt-6 max-w-xl">
-          <p>Phase 2: official TikTok Login Kit, Instagram Business Login, Facebook Login for Business. No passwords, no devices.</p>
+          <p>
+            Connect the accounts you own through TikTok Login Kit, Instagram Business Login and Facebook Login for Business. No passwords, no devices.{" "}
+            <Link href="/app/accounts" className="font-medium text-emerald-800 underline">
+              Open connected accounts
+            </Link>
+          </p>
           <button type="submit" className={`${primary} mt-6`}>
             Finish onboarding
           </button>

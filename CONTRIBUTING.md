@@ -1,6 +1,6 @@
 # Contributing
 
-Torq-Pamba is a Phase 0 and Phase 1 studio: it makes videos, requires approval, and schedules them. It does not publish. Changes that add a posting path, a device farm, account trading, or a way to strip AI-provenance metadata will not be accepted.
+Torq-Pamba makes videos, requires approval, schedules them, and (from Phase 2) publishes them through official TikTok, Instagram and Facebook APIs to accounts the customer connected. Read [STANDARDS.md](STANDARDS.md) first. Changes that add a posting path outside `src/lib/publish/live/`, a device farm, account trading, or a way to strip AI-provenance metadata will not be accepted.
 
 ## Setup
 
@@ -53,7 +53,10 @@ Business rules live in `src/lib` so unit tests can call them without rendering a
 | `src/lib/pricing.ts` | List prices, tiers, fallback chains, `estimateClipCost` |
 | `src/lib/providers/` | One adapter file per vendor, plus `mock.ts`, `live.ts`, `registry.ts` |
 | `src/lib/approval.ts` | Gate rules. Approve is impossible until the draft is complete |
-| `src/lib/schedule.ts` | Slots and `processDueItems`. No publish function |
+| `src/lib/schedule.ts` | Slots and `processDueItems`. Hands targeted items to `src/lib/publish/queue.ts` |
+| `src/lib/publish/` | Accounts, OAuth, rules, mock publisher, queue, dispatch. Official endpoints live only in `live/` |
+| `src/lib/media/` | Clip storage and ffmpeg stitching |
+| `src/lib/analytics/` | Post metric snapshots |
 | `src/lib/billing.ts` | Plans and Stripe test mode |
 | `e2e/` | Playwright journey and capture |
 | `drizzle/` | Committed SQL migrations |

@@ -15,6 +15,8 @@ export type ClipResult = {
   durationS: number;
   frameUrls: string[];
   costUsd: number;
+  /** Storage key of the downloaded clip (live mode only). Mock clips have none. */
+  mediaKey?: string;
 };
 
 export type ImageRequest = {

@@ -11,6 +11,14 @@ export class BillingError extends Error {
   }
 }
 
+/** Thrown when the webhook endpoint is called but STRIPE_WEBHOOK_SECRET is unset. */
+export class WebhookNotConfiguredError extends BillingError {
+  constructor() {
+    super("STRIPE_WEBHOOK_SECRET is not set. Unsigned webhooks are refused.");
+    this.name = "WebhookNotConfiguredError";
+  }
+}
+
 export type PaidPlan = "creator" | "studio";
 
 export const PLANS = [
@@ -165,36 +173,18 @@ async function applyCheckoutSession(session: Stripe.Checkout.Session): Promise<b
   return true;
 }
 
-function parseUnsignedEvent(payload: string): Stripe.Event {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(payload);
-  } catch {
-    throw new BillingError("Webhook payload is not JSON");
-  }
-  if (!parsed || typeof parsed !== "object") throw new BillingError("Webhook payload is not a Stripe event");
-  const event = parsed as Stripe.Event;
-  if (event.object !== "event" || typeof event.type !== "string" || !event.data) {
-    throw new BillingError("Webhook payload is not a Stripe event");
-  }
-  return event;
-}
-
 export async function handleWebhook(payload: string, signature: string | null): Promise<{ applied: boolean }> {
   assertTestMode();
   const secret = process.env.STRIPE_WEBHOOK_SECRET?.trim() ?? "";
-  // Unsigned bodies are accepted only when STRIPE_WEBHOOK_SECRET is unset.
+  // Fail closed: without a signing secret no event is trusted, signed or not.
+  if (!secret) throw new WebhookNotConfiguredError();
+  if (!signature) throw new BillingError("Missing Stripe signature");
   let event: Stripe.Event;
-  if (secret) {
-    if (!signature) throw new BillingError("Missing Stripe signature");
-    try {
-      event = Stripe.webhooks.constructEvent(payload, signature, secret);
-    } catch (error) {
-      if (error instanceof BillingError) throw error;
-      throw new BillingError("Webhook signature verification failed");
-    }
-  } else {
-    event = parseUnsignedEvent(payload);
+  try {
+    event = Stripe.webhooks.constructEvent(payload, signature, secret);
+  } catch (error) {
+    if (error instanceof BillingError) throw error;
+    throw new BillingError("Webhook signature verification failed");
   }
 
   if (event.type !== "checkout.session.completed") return { applied: false };

@@ -128,10 +128,10 @@ export async function runMockJourney(page: Page, options: { pace?: boolean; emai
 
   await page.goto("/app/schedule");
   await expect(page.getByRole("heading", { name: "Schedule", exact: true })).toBeVisible();
-  await expect(page.getByText(/Publishing arrives in Phase 2/)).toBeVisible();
+  await expect(page.getByText(/official TikTok, Instagram and Facebook APIs only/)).toBeVisible();
   const queued = page.getByRole("row").filter({ hasText: "oat-milk cold brew" });
   await expect(queued).toContainText("Scheduled");
-  await shot(page, pace, "08-schedule-queue.png", page.getByText(/Publishing arrives in Phase 2/));
+  await shot(page, pace, "08-schedule-queue.png", page.getByText(/official TikTok, Instagram and Facebook APIs only/));
 
   if (!pace) return;
 
@@ -144,4 +144,24 @@ export async function runMockJourney(page: Page, options: { pace?: boolean; emai
   await expect(page.getByRole("heading", { name: "Terms of Service" })).toBeVisible();
   await shot(page, pace, "10-terms.png", page.getByRole("heading", { name: "Terms of Service" }));
   await hold(page, pace);
+}
+
+/** Chat → generate → approve, from a signed-in dashboard. Returns on the approved video page. */
+export async function makeApprovedVideo(
+  page: Page,
+  options: { prompt?: string; privacy?: "Public" | "Friends" | "Only me" } = {},
+): Promise<void> {
+  await page.goto("/app/chat");
+  await page.getByLabel("Message").fill(options.prompt ?? VIDEO_PROMPT);
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("table", { name: "Cost preview" })).toBeVisible();
+  await page.getByRole("button", { name: /Generate \(est\. \$/ }).click();
+  await expect(page.getByRole("heading", { name: "Video ready" })).toBeVisible();
+  await page.getByRole("link", { name: "Review & approve" }).click();
+  await page.getByLabel("Creator nickname").fill("Northwind");
+  await page.getByLabel("Who can view this video").selectOption({ label: options.privacy ?? "Public" });
+  await page.getByRole("checkbox", { name: "I agree to TikTok's Music Usage Confirmation" }).check();
+  await page.getByRole("checkbox", { name: "I consent to schedule this video" }).check();
+  await page.getByRole("button", { name: "Approve" }).click();
+  await expect(page.getByRole("heading", { name: "Approved" })).toBeVisible();
 }

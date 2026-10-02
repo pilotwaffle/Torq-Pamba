@@ -244,8 +244,8 @@ export default function HomePage() {
             <li>You own your accounts.</li>
             <li>No device farms, warming, account trading or metadata stripping.</li>
             <li>
-              Torq-Pamba never posts from devices. Phase 2, after app review, uses only the official
-              TikTok, Instagram, and Facebook APIs.
+              Torq-Pamba never posts from devices. Publishing uses only the official TikTok, Instagram,
+              and Facebook APIs, on accounts you connect through their own login.
             </li>
           </ul>
         </section>

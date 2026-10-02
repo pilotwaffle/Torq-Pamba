@@ -1,7 +1,9 @@
 import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { avatars, generationAttempts, videos, workspaces } from "@/db/schema";
+import { writeAudit } from "@/lib/audit";
 import { remainingBudgetUsd } from "@/lib/budget";
+import { stitchClips } from "@/lib/media/stitch";
 import {
   estimateClipCost,
   FALLBACK_CHAIN,
@@ -51,6 +53,8 @@ export type GeneratedScene = {
   durationS: number;
   model: string;
   frameUrl: string;
+  /** Downloaded live clip (storage key). Absent for mock frames. */
+  mediaKey?: string;
 };
 
 export type StitchedManifest = {
@@ -65,6 +69,7 @@ type SceneRun = {
   ok: boolean;
   model: string;
   frameUrl: string;
+  mediaKey?: string;
   attempts: AttemptRecord[];
 };
 
@@ -130,7 +135,7 @@ export async function generateScenes(input: {
   portraitSvg?: string;
 }): Promise<{
   ok: boolean;
-  produced: { index: number; model: string; frameUrl: string; durationS: number }[];
+  produced: { index: number; model: string; frameUrl: string; durationS: number; mediaKey?: string }[];
   attempts: AttemptRecord[];
 }> {
   const resolve = input.resolve ?? videoProvider;
@@ -144,6 +149,7 @@ export async function generateScenes(input: {
       model: scene.model,
       frameUrl: scene.frameUrl,
       durationS: input.scenes[index]?.durationS ?? 0,
+      ...(scene.mediaKey ? { mediaKey: scene.mediaKey } : {}),
     })),
     attempts: settled.flatMap((scene) => scene.attempts),
   };
@@ -173,6 +179,7 @@ async function runScene(
         ok: true,
         model: result.providerId,
         frameUrl: result.frameUrls[0] ?? "",
+        ...(result.mediaKey ? { mediaKey: result.mediaKey } : {}),
         attempts,
       };
     } catch (error) {
@@ -329,8 +336,10 @@ export async function generateVideo(input: {
         durationS: scene.durationS,
         model: generated.produced[index]?.model || TIER_MODEL[input.tier],
         frameUrl: generated.produced[index]?.frameUrl || "",
+        ...(generated.produced[index]?.mediaKey ? { mediaKey: generated.produced[index]?.mediaKey } : {}),
       })),
     });
+    const mediaKey = await renderIfLive(workspace.id, video.id, manifest);
     const usedModel = manifest.scenes[0]?.model ?? TIER_MODEL[input.tier];
     await db
       .update(videos)
@@ -338,6 +347,7 @@ export async function generateVideo(input: {
         status: "ready",
         model: usedModel,
         manifest,
+        mediaKey,
         costActualUsd: charge,
         updatedAt: new Date(),
       })
@@ -349,5 +359,26 @@ export async function generateVideo(input: {
       .set({ status: "failed", costActualUsd: 0, updatedAt: new Date() })
       .where(eq(videos.id, video.id));
     throw error;
+  }
+}
+
+/**
+ * When every scene came back as a real clip (live mode), stitch them with ffmpeg
+ * and return the stored MP4 key. Mock scenes are SVG frames and stay a manifest.
+ * A stitch failure keeps the video reviewable and is written to the audit log.
+ */
+async function renderIfLive(workspaceId: string, videoId: string, manifest: StitchedManifest): Promise<string | null> {
+  const keys = manifest.scenes.map((scene) => scene.mediaKey ?? "");
+  if (keys.length === 0 || keys.some((key) => !key)) return null;
+  try {
+    return await stitchClips({ sceneKeys: keys, captions: manifest.captions });
+  } catch (error) {
+    await writeAudit({
+      workspaceId,
+      actor: "system",
+      action: "video.stitch_failed",
+      data: { videoId, message: error instanceof Error ? error.message.slice(0, 300) : "failed" },
+    });
+    return null;
   }
 }
