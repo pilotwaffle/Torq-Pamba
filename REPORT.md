@@ -1,8 +1,10 @@
 # Torq-Pamba rebuild: phases 2–4, ported onto the v2 foundation
 
-**Current branch:** `feat/phase2-plus-on-v2` in `/home/box/torq-pamba-rebuild`, built on Boris's `feat/v2-foundation` at `84b22bb28145f09f5316c03e36069dd3211ba55e` (fetched read-only from origin). Phases 2, 3 and 4 were cherry-picked one commit per phase, then this report.
+**Current branch:** `feat/phase2-plus-on-v2` in `/home/box/torq-pamba-rebuild`, built on Boris's `feat/v2-foundation` at `84b22bb28145f09f5316c03e36069dd3211ba55e` (fetched read-only from origin). Phases 2, 3 and 4 were cherry-picked one commit per phase, then a report commit, then `036ab55`, which consolidates them onto Boris's foundation tables (see "Consolidation onto the foundation tables").
 
 **Fallback:** the original branch `feat/phase2-plus` (base `7f4cc80`, head `57a17eb`) is unchanged.
+
+**Publishing criterion.** Reversing the V2 no-publish criterion (CONTRIBUTING.md criterion 1 and README rule 1, narrowed in `7d62583`) needs Barry's explicit, named yes before any push or merge of this branch.
 
 Nothing was pushed (the push URL is `DISABLED`). No PR, merge, tag or deploy was made. Boris's branches, worktrees and bundles were not modified. Mock mode is the default. No secrets are in the tree.
 
@@ -12,9 +14,11 @@ Nothing was pushed (the push URL is `DISABLED`). No PR, merge, tag or deploy was
 | `7d62583` | Phase 2: publish and measure, real video pipeline | 129 passed (22 files) | 5 passed, 1 skipped |
 | `0a539df` | Phase 3: reach engine | 157 passed (24 files) | 7 passed, 1 skipped |
 | `fbd82e8` | Phase 4: platform | 180 passed (26 files) | 10 passed, 1 skipped |
-| this commit | REPORT.md | 180 passed (26 files) | 10 passed, 1 skipped |
+| `b62818b` | REPORT.md | 180 passed (26 files) | 10 passed, 1 skipped |
+| `036ab55` | Consolidate onto foundation tables (migrations 0005, 0006) | 182 passed (26 files) | 10 passed, 1 skipped |
+| this commit | REPORT.md update | 182 passed (26 files) | 10 passed, 1 skipped |
 
-**Unit count check.** The target was at least base plus ported tests. Base is 89. The ported tests are 91: 140 on the old branch minus 49 on the original main, made up of 40 in phase 2, 28 in phase 3 and 23 in phase 4. 89 + 91 = 180, and 180 pass. No ported test was dropped. The two fail-closed tests that overlap with Boris's coverage were kept and moved to his 401 semantics.
+**Unit count check.** The target was at least base plus ported tests. Base is 89. The ported tests are 91: 140 on the old branch minus 49 on the original main, made up of 40 in phase 2, 28 in phase 3 and 23 in phase 4. 89 + 91 = 180, and 180 pass. No ported test was dropped. The consolidation added 2 more (an `ai_disclosure` publish test and a 0005/0006 migration test), giving 182. The two fail-closed tests that overlap with Boris's coverage were kept and moved to his 401 semantics.
 
 **Original branch, for reference** (`feat/phase2-plus` on `7f4cc80`, original main = 49 unit):
 
@@ -68,7 +72,7 @@ Its exact-list assertion (`["0000_init", "0001_v2_foundation"]`) was narrowed to
 - **(c) e2e layout.** `e2e/journey.ts` changes landed in `e2e/support/steps.ts`: the banner regex and `makeApprovedVideo`. `PASSWORD` was already exported from `e2e/support/auth.ts`.
   - Specs moved to `e2e/publish/`, `e2e/reach/` and `e2e/platform/` and import from `e2e/support` (`signUpFresh`).
   - In the OAuth spec I added a wait for `/signup` before filling, because `/login` and `/signup` share the Email label and the fill could land mid-navigation.
-- **(d) No-publish guard.** Boris's scan in `src/lib/schedule.test.ts` was narrowed only to allow the three endpoints under `src/lib/publish/live/`. It still scans all of `src/`, still checks the banner, and also searches for `/post/publish/`. It also asserts the allowlist isn't vacuous. A second test pins the only importers of `live/` to `lib/publish/dispatch.ts`, `lib/publish/accounts.ts` and `lib/analytics/index.ts`. `CONTRIBUTING.md` criterion 1 and README rule 1 were updated to match, as `docs/V2-PLAN.md` requires.
+- **(d) No-publish guard.** Boris's scan in `src/lib/schedule.test.ts` was narrowed only to allow the three endpoints under `src/lib/publish/live/`. It still scans all of `src/`, still checks the banner, and also searches for `/post/publish/`. It also asserts the allowlist isn't vacuous. A second test pins the only importers of `live/` to `lib/publish/dispatch.ts`, `lib/publish/accounts.ts` and `lib/analytics/index.ts`. `CONTRIBUTING.md` criterion 1 and README rule 1 were updated to match, as `docs/V2-PLAN.md` requires. Both are in the same commit as the narrowed guard (`7d62583`, together with the `schedule.test.ts` change), and the consolidation did not touch them. Reversing that criterion needs Barry's explicit, named yes before any push or merge.
 - **(e) Media.** His base (`84b22bb`) has no `src/lib/media/`, so my `stitch.ts` and `storage.ts` were kept as they are. His wave-1 branch `a-video-pipeline` (`51f643e`, not in the base) has a different media API (`MediaStorage`, `video_renders`, `media_assets`). Merging that branch later will be an add/add conflict on both files plus `router.ts`.
 - **(f) Fail-closed.** His cron and webhook code (`src/lib/local-mode.ts`: 401, with `ALLOW_INSECURE_LOCAL_ENDPOINTS=1` honoured outside production only) was kept. My 503 duplicate in `billing.ts`, `schedule.ts` and the webhook route was dropped, and his "opens only in explicit local mode" test was kept.
   - My `src/lib/security/fail-closed.test.ts` and the e2e fail-closed test now expect 401, so the coverage stays.
@@ -80,9 +84,40 @@ Its exact-list assertion (`["0000_init", "0001_v2_foundation"]`) was narrowed to
   - Accounts, Analytics, Reach, Knowledge and Creators are `NAV_ITEMS` entries (orders 750–860).
   - The REST/MCP operations were not re-routed through `chatTools`, because his tools take free text and reply through a chat callback. That would have been a redesign.
 
-### Not resolved: duplicate tables (owner decision)
+## Consolidation onto the foundation tables (036ab55)
 
-The foundation pre-created wave-2 placeholder tables for the same features: `publishing_connections`, `publish_attempts`, `post_analytics_snapshots`, `knowledge_items` and `api_keys`. Per "don't redesign anything", my phases still use their own tables (`social_accounts`, `publish_jobs`, `post_metrics`, `knowledge_tiles`, `api_credentials`). His placeholders are untouched and unused. Someone needs to pick one set and migrate. Also, `videos.media_key` (mine) overlaps his `videos.current_render_id` and `video_renders`.
+Boris's foundation tables are now canonical. My five duplicate tables are gone, and every phase 2–4 code path reads and writes his tables. Boris confirmed the mappings against `docs/V2-PLAN.md`.
+
+| Phase table (dropped) | Foundation table (canonical) | Status |
+| --- | --- | --- |
+| `social_accounts` | `publishing_connections` | Done. Tokens are sealed into his encrypted token columns with `token_key_version` (currently 1). A token sealed under a different key version is refused, not decrypted. `scopes` is a text array. Disconnecting sets `status = revoked`. |
+| `publish_jobs` | `publish_attempts` | Done. `ai_disclosure` (default true) is set from `videos.ai_generated` at enqueue and sent as the platform's AI label (TikTok `is_aigc`, Instagram `is_ai_generated`). Dispatch refuses to post an AI-generated video whose attempt has `ai_disclosure = false`. Statuses map as queued → `pending`, processing → `submitted`, succeeded → `published`, failed → `failed`, canceled → `canceled`. The TikTok 24 h creator cap counts by `submitted_at`. |
+| `post_metrics` | `post_analytics_snapshots` | Done. These are official-API metrics only; null counters read as 0. |
+| `knowledge_tiles` | `knowledge_items` | Done. Hooks, formats, brand facts and preferences feed the plan and the agent context. Kind `hook` → `hook_result`. Origin, evidence and the experiment id go into `source_ref`, with `source` = `user` (manual or brief) or `analytics` (experiment). Brief seeding writes audience → `brand_fact`, what-they-do → `angle` and tone → `preference`. |
+| `api_credentials` | `api_keys` | Done. It stores the hash and display prefix, `scopes` plus `read_only` (scope fails closed to read), and `max_credits` as the monthly spend cap. The cap check returns 402 `spend_cap_exceeded` before any spend. |
+
+**New columns (migration 0005).**
+- `knowledge_kind` enum: added `angle` and `format`.
+- `publishing_connections.mode` (text, default `'mock'`)
+- `publish_attempts.mode` and `publish_attempts.privacy` (text, default `''`)
+- `post_analytics_snapshots.reach` (bigint, nullable)
+- `knowledge_items.score` (integer, default 0)
+- `api_keys.kind` (`api_credential_kind`, default `'key'`), `api_keys.grant_id` (uuid, nullable, indexed by `api_keys_grant_idx`) and `api_keys.client_id` (text, nullable). These carry OAuth access and refresh tokens and their grant.
+- `api_requests.credits` (integer, default 0)
+- `oauth_codes.max_credits` (integer, nullable), replacing `oauth_codes.spend_cap_usd`
+- Foreign keys re-pointed: `publish_events.job_id`, `ad_handoffs.job_id` and `hook_variants.publish_job_id` → `publish_attempts`; `hook_experiments.account_id` → `publishing_connections`.
+
+**Why two migrations, not one 0005.** In a single generated migration, drizzle-kit emits the old foreign-key drops after `DROP TABLE … CASCADE`, so it fails on apply. I generated `0005_consolidate_foundation` (enum values, columns, FK re-points) and then `0006_drop_phase_duplicates` (drops `api_credentials`, `knowledge_tiles`, `post_metrics`, `publish_jobs`, `social_accounts` and the `knowledge_tile_kind` and `publish_job_status` enums). I did it from a temporary intermediate schema, so both files, the journal and the snapshots come from drizzle-kit and were not hand-edited. At each rename prompt I chose "create column". 0000–0004 are unchanged. All of 0000–0006 apply cleanly on PGlite, and `migration.test.ts` checks both.
+
+**No data copy.** 0005 and 0006 copy no rows from the dropped tables, because this branch was never deployed and those tables never held production data. If any environment ever ran 0002–0004 with real data, it needs a hand-written copy before 0006.
+
+**Credits vs USD.** `api_keys.max_credits` is an integer ceiling (0–10,000,000), so the old USD caps convert at $0.01 per credit (`USD_PER_CREDIT`), the same rate as Boris's f-credits branch. The base has no credit ledger. Spend under a ceiling is the sum of `api_requests.credits` for the grant in the calendar month (UTC). Switch to the ledger when f-credits lands. Settings shows "credits used / ceiling ($ spent)". The consent page and the key form ask for a "monthly credit ceiling" (OAuth default 1,000).
+
+**Tables that stay.** `publish_events` (the audit trail for an attempt), `api_requests`, `oauth_clients`, `oauth_codes`, `service_requests` and the reach tables (`hook_experiments`, `hook_variants`, `ad_handoffs`, `creator_briefs`) have no foundation equivalent. They are kept, with their FKs re-pointed.
+
+**Left as-is: `videos.media_key`.** Per Boris, `media_key` is not mapped onto `videos.current_render_id`, and my `src/lib/media/stitch.ts` and `storage.ts` stay as they are. At integration, `media_key` moves to branch a's render API. For the record, the `video_renders` table is already in the 84b22bb schema (`schema/media.ts`); what the base lacks is a render API to write it.
+
+**Rebase pending.** Boris will send a wave1-integration SHA. This branch will be rebased onto it then. Nothing here waits on it.
 
 ## Why the work is split this way
 
@@ -106,7 +141,7 @@ Each phase was committed and bundled only after both suites passed. That way a l
 - Nano Banana 2 and Pro image adapters were added. Their model ids are env-overridable.
 
 **Publishing on official APIs only.**
-- New tables: `social_accounts` (tokens sealed with AES-256-GCM), `publish_jobs`, `publish_events` and `post_metrics`.
+- New tables: `social_accounts` (tokens sealed with AES-256-GCM), `publish_jobs`, `publish_events` and `post_metrics`. Since `036ab55`, all but `publish_events` are replaced by `publishing_connections`, `publish_attempts` and `post_analytics_snapshots`.
 - OAuth uses HMAC state and PKCE for TikTok Login Kit, Instagram Business Login and Facebook Login for Business.
 - TikTok uses Direct Post and falls back to upload-to-drafts. Until `TIKTOK_AUDITED=1`, posts are forced to `SELF_ONLY` and limited to 5 creators per 24 h.
 - Instagram supports Reels and Trial Reels. Facebook supports Page Reels.
@@ -138,7 +173,7 @@ All of it lives in `src/lib/reach/`:
 
 **Credentials** (`src/lib/platform/credentials.ts`). There are three kinds of secret: API keys (`tpk_`), OAuth access tokens (`tpa_`, valid 1 h) and refresh tokens (`tpr_`, valid 30 d). Only SHA-256 hashes are stored. Credentials are grouped into grants, and each grant has:
 - a scope, read or write
-- an optional monthly spending cap in USD (calendar month, UTC)
+- an optional monthly spending cap in USD (calendar month, UTC); since `036ab55` this is `api_keys.max_credits`, in credits at $0.01 each
 - a request log, which backs a limit of 120 requests per minute
 
 Refresh rotation revokes the old pair and re-issues new tokens on the same grant.
@@ -182,11 +217,17 @@ Refresh rotation revokes the old pair and re-issues new tokens on the same grant
 4. **`src/lib/providers/registry.test.ts`.** "keeps the image and chat providers" now expects `nano-banana-2` and `nano-banana-pro` as well as `grok-imagine-image`, and checks that every image provider's price equals its catalog entry. Before, it checked only the first one.
 5. **`e2e/support/steps.ts`.** The schedule banner regex changed to "official TikTok, Instagram and Facebook APIs only", because the banner text changed. `makeApprovedVideo` was added. No journey assertion was removed.
 6. **Mine: `src/lib/security/fail-closed.test.ts` and `e2e/publish/publish.spec.ts`.** Unset-secret responses are expected as 401 (his semantics), not 503. The first also clears `ALLOW_INSECURE_LOCAL_ENDPOINTS` during the test.
-7. **Mine: `e2e/platform/platform.spec.ts`.** It waits for `/signup` before filling the form (navigation race), and the assertions are unchanged.
+7. **Mine: `e2e/platform/platform.spec.ts`.** It waits for `/signup` before filling the form (navigation race). In the port commit, the assertions were unchanged.
+8. **Consolidation (`036ab55`), all mine except item 8e.**
+   - a. `publish-flow.test.ts`: fields moved to the foundation tables and statuses. New test: "sets ai_disclosure from the video, sends it as the AI label, and never posts an AI-generated video without it".
+   - b. `reach-flow.test.ts` and `reach-pure.test.ts`: the new knowledge kinds, `source_ref` origin, and `published` status. The validate test also accepts `format`.
+   - c. `platform.test.ts`: `api_keys` and `max_credits`, credit assertions, and a fail-closed scope check.
+   - d. `e2e/platform/platform.spec.ts`: "spending cap" labels became "credit ceiling" (2,000 and 750 credits). The Settings row is now expected to read `<credits> / 2,000 ($<usd>)`, and the OAuth test expects `maxCredits: 750`. It was renamed "…credit ceiling". Nothing was removed.
+   - e. Boris's `src/db/migration.test.ts`: one new test, "consolidates the phase 2-4 tables onto the foundation tables (0005 adds columns, 0006 drops the duplicates)". His existing assertions are unchanged.
 
 ## Go-live checklist (none of this has been done)
 
-- [ ] **Database.** Point `DATABASE_URL` at managed Postgres and run `npm run db:migrate` for migrations 0000–0004.
+- [ ] **Database.** Point `DATABASE_URL` at managed Postgres and run `npm run db:migrate` for migrations 0000–0006. 0006 drops the phase 2–4 duplicate tables without copying rows (they were never deployed); if any database holds data in them, copy it first.
 - [ ] **Secrets.** Never set `ALLOW_INSECURE_LOCAL_ENDPOINTS` in a deployed environment (it is ignored when `NODE_ENV=production`, but keep it unset). Set `CRON_SECRET` and call `POST /api/cron/tick` with Bearer on a schedule. Set `STRIPE_WEBHOOK_SECRET`. Keep Stripe in test mode; the code refuses `sk_live_`.
 - [ ] **Encryption and OAuth state.** `TOKEN_ENCRYPTION_KEY` (32 bytes) is required to seal social tokens and Spark codes. Losing it means reconnecting every account. Also set `OAUTH_STATE_SECRET`.
 - [ ] **`PUBLIC_BASE_URL`.** Set it to the https origin. It is used for social redirect URIs, `/api/media` pulls, and the OAuth and MCP issuer and resource.
@@ -220,12 +261,14 @@ Nothing was called live. These were written from public docs and may be wrong:
 - **Rate limiting** is counted in the database, which is fine for one region but is not a distributed limiter.
 - **Done-with-you** leads are stored, but nobody is notified by email.
 - **Ads.** No programmatic TikTok or Meta marketing-API use (hand-off only, by design).
-- **Duplicate tables.** Phases 2–4 tables sit beside the foundation's unused placeholders (see "Not resolved" above).
-- **Wave-1 merge.** None of Boris's wave-1 feature branches (video pipeline, chat agent, voices, editor, research, credits) are on this base. Merging them will conflict at least on `src/lib/media/*` and `src/lib/router.ts` (video pipeline), the `plan` tool (chat agent), and the nav list and shell test (every feature that adds a page).
+- **Render model.** `videos.media_key` and my stitch and storage modules are still used, instead of `video_renders` and `current_render_id`. They move to branch a's render API at integration (see "Consolidation").
+- **Credits.** The spend ceiling counts credits from `api_requests`. There is no shared credit ledger until f-credits lands.
+- **Wave-1 merge.** This branch will be rebased onto Boris's wave1-integration SHA when he sends it. None of Boris's wave-1 feature branches (video pipeline, chat agent, voices, editor, research, credits) are on this base. Merging them will conflict at least on `src/lib/media/*` and `src/lib/router.ts` (video pipeline), the `plan` tool (chat agent), and the nav list and shell test (every feature that adds a page).
 - **Won't build** (compliance): device or real-iPhone posting, managed accounts and warming, and a metadata scrubber.
 
 ## Blockers during the run
 
 - **Stan milestone pings were not sent.** No agent-messaging tool was available, and using email, X or Notion instead would have been an unapproved external message. The drafts for all three are in the run's final report.
 - **Claude Code's OAuth session expired**, so all the work was done directly, without delegating to it.
+- **Consolidation run (2026-10-02).** drizzle-kit's drop ordering forced the 0005 and 0006 split (see "Consolidation"). Nothing else blocked.
 - **Port run (2026-10-02).** No blockers. `feat/v2-foundation` was fetched read-only from origin, so the bundle and worktree fallbacks weren't needed.
