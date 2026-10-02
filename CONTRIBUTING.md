@@ -60,6 +60,8 @@ Business rules live in `src/lib` so unit tests can call them without rendering a
 | `src/lib/media/` | Clip storage and ffmpeg stitching |
 | `src/lib/analytics/` | Post metric snapshots |
 | `src/lib/reach/` | Hook tests, Knowledge tiles, ad hand-offs, creator briefs |
+| `src/lib/platform/` | API keys and OAuth grants, REST v1, MCP server, OAuth 2.1 authorization server |
+| `src/lib/tools/` | Pure logic for the free public tools |
 | `src/lib/billing.ts` | Plans and Stripe test mode |
 | `e2e/` | `support/` (steps, `account` fixture, journey), `core/` (journey, fallback, shell, capture), and one folder per feature |
 | `drizzle/` | Committed SQL migrations |
@@ -124,6 +126,8 @@ Before you open a change:
 
 Add or extend a Vitest file next to the module when you change pricing, the router, approval, scheduling, billing, auth, or onboarding. The forbidden-endpoint scan in `src/lib/schedule.test.ts` must stay, and it must still fail the suite if those strings appear under `src/`.
 
-Run `npm run test:e2e` when you change a page, a form, or a flow the journey covers (signup, onboarding, chat, approval, schedule). A new feature adds its own `e2e/<feature>/*.spec.ts` using `test` from `e2e/support`, rather than extending the core journey. If you change what a screenshot shows, regenerate with `npm run capture` and `bash scripts/make-media.sh`.
+Run `npm run test:e2e` when you change a page, a form, or a flow the e2e specs cover (signup, onboarding, chat, approval, schedule, publishing, reach, API keys, OAuth consent, free tools). A new feature adds its own `e2e/<feature>/*.spec.ts` using `test` from `e2e/support`, rather than extending the core journey. If you change what a screenshot shows, regenerate with `npm run capture` and `bash scripts/make-media.sh`.
+
+If you add a REST route or an MCP tool, put the logic in `src/lib/platform/operations.ts` so both surfaces share it, and extend `src/lib/platform/platform.test.ts`. Never store a raw key or token; store `hashSecret(...)`.
 
 If you add a migration, generate it with `npm run db:generate` and commit `./drizzle`. Do not hand-edit a snapshot to skip a column the schema declares.

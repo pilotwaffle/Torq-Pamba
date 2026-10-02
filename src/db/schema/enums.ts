@@ -107,3 +107,7 @@ export const experimentStatus = pgEnum("experiment_status", ["draft", "running",
 export const knowledgeTileKind = pgEnum("knowledge_tile_kind", ["hook", "angle", "audience", "format", "insight"]);
 export const adHandoffKind = pgEnum("ad_handoff_kind", ["tiktok_spark", "meta_partnership"]);
 export const adHandoffStatus = pgEnum("ad_handoff_status", ["awaiting_creator", "ready", "revoked"]);
+
+// Phase 4 platform (ported from feat/phase2-plus).
+export const apiCredentialKind = pgEnum("api_credential_kind", ["key", "oauth_access", "oauth_refresh"]);
+export const apiScope = pgEnum("api_scope", ["read", "write"]);

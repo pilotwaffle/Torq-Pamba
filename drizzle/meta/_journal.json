@@ -29,6 +29,13 @@
       "when": 1790920328495,
       "tag": "0003_phase3_reach",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790920484272,
+      "tag": "0004_phase4_platform",
+      "breakpoints": true
     }
   ]
 }

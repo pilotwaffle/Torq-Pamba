@@ -12,7 +12,7 @@ export * from "./publishing";
 export * from "./platform";
 export * from "./reach";
 
-import type { apiKeys, knowledgeItems } from "./platform";
+import type { apiCredentials, apiKeys, knowledgeItems, oauthClients } from "./platform";
 import type { chatToolCalls, conversations } from "./chat";
 import type { creditCharges, creditLedger, creditTopUps, plans } from "./credits";
 import type { sceneTakes, videoCaptions, videoHooks, videoScenes } from "./editor";
@@ -54,3 +54,5 @@ export type HookVariant = typeof hookVariants.$inferSelect;
 export type KnowledgeTile = typeof knowledgeTiles.$inferSelect;
 export type AdHandoff = typeof adHandoffs.$inferSelect;
 export type CreatorBrief = typeof creatorBriefs.$inferSelect;
+export type ApiCredential = typeof apiCredentials.$inferSelect;
+export type OAuthClient = typeof oauthClients.$inferSelect;

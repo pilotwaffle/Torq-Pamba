@@ -128,7 +128,7 @@ export default function HomePage() {
             <div className="mb-5 h-1 w-12 rounded-full bg-emerald-600" />
             <h1 className="display-serif max-w-xl text-4xl leading-[1.15] text-pretty sm:text-5xl">{HERO}</h1>
             <p className="mt-5 max-w-md text-lg leading-7 text-zinc-700">
-              You approve every clip. Torq-Pamba schedules it and does not post it.
+              You approve every clip. Torq-Pamba posts it only to accounts you connected, through official APIs.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <Link href="/signup" className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-emerald-800">
