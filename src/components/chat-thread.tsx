@@ -9,6 +9,7 @@ import { isAgentStep, type AgentEvent, type ToolCallStatus } from "@/lib/agent/e
 import { isPlanMessage, isReadyMessage, type VideoPlan } from "@/lib/agent/plan";
 import type { ToolConfirmation } from "@/lib/agent/tools/types";
 import { FALLBACK_CHAIN, TIER_MODEL, estimateClipCost, formatUsd, type Tier } from "@/lib/pricing";
+import { CreditQuote } from "@/components/credits/credit-quote";
 import { cardClass, fieldClass, primaryButton, secondaryButton } from "@/components/ui";
 
 export type ChatMessageView = {
@@ -454,6 +455,7 @@ function PlanCard({ messageId, conversationId, plan }: { messageId: string; conv
           </tbody>
         </table>
       </div>
+      <CreditQuote tier={tier} durationS={plan.durationS} />
       <div className="flex flex-col gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-medium tracking-wide text-zinc-500 uppercase">Model</span>

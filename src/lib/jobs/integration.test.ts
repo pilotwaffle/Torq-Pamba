@@ -1,18 +1,26 @@
 import { and, asc, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getDb } from "@/db";
-import { chatMessages, generationJobs, sceneTakes, videos } from "@/db/schema";
+import { chatMessages, creditCharges, creditLedger, generationJobs, sceneTakes, videos } from "@/db/schema";
 import { isPlanMessage } from "@/lib/agent/plan";
 import { generateFromMessage, handleUserMessage, listChat } from "@/lib/agent/run";
 import { signupAccount } from "@/lib/auth/account";
+import { getCreditBalance } from "@/lib/credits/ledger";
+import { quoteClipCredits } from "@/lib/credits/pricing";
 import { regenerateScene } from "@/lib/editor/regenerate";
 import { loadEditor } from "@/lib/editor/store";
 import { resetMockRefusals } from "@/lib/providers/mock";
+import { videoProvider } from "@/lib/providers/registry";
+import { FALLBACK_CHAIN, generateVideo } from "@/lib/router";
 import { renderInputFor } from "./render";
+import { settleVideo } from "./settle";
 import { processJobs } from "./worker";
 
 beforeEach(() => resetMockRefusals());
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
 
 async function plannedMessage(label: string) {
   const { user, workspace } = await signupAccount({
@@ -107,5 +115,97 @@ describe("editor x render", () => {
       .where(and(eq(generationJobs.videoId, result.videoId), eq(generationJobs.kind, "render"), eq(generationJobs.status, "queued")));
     expect(renders).toHaveLength(1);
     expect(renders[0]?.request).toMatchObject({ reason: "edit" });
+  });
+});
+
+describe("credits x video jobs", () => {
+  async function asyncVideo(label: string) {
+    const { workspace } = await signupAccount({
+      email: `${label}-${Date.now()}-${Math.random().toString(16).slice(2)}@example.com`,
+      password: "correct-horse-battery",
+      workspaceName: `${label} Co`,
+    });
+    const before = await getCreditBalance(workspace.id);
+    const scenes = [
+      { visual: "kitchen", line: "Cold brew at home", durationS: 2 },
+      { visual: "street", line: "Out the door", durationS: 3 },
+    ];
+    const result = await generateVideo({
+      workspaceId: workspace.id,
+      tier: "standard",
+      title: label,
+      prompt: `${label} cold brew`,
+      hook: "Made for commuters",
+      voiceLines: ["a", "b"],
+      scenes,
+      waitMs: 0,
+    });
+    if (!result.ok || !result.pending) throw new Error("expected a pending video");
+    const quote = quoteClipCredits({ tier: "standard", durationS: 5 }).total;
+    return { workspace, videoId: result.videoId, before, quote };
+  }
+
+  async function chargesFor(videoId: string) {
+    const db = await getDb();
+    return db.select().from(creditCharges).where(eq(creditCharges.videoId, videoId));
+  }
+
+  async function ledgerCount(workspaceId: string) {
+    const db = await getDb();
+    return (await db.select().from(creditLedger).where(eq(creditLedger.workspaceId, workspaceId))).length;
+  }
+
+  it("reserves before the jobs run and captures once when the worker finishes the video", async () => {
+    const { workspace, videoId, before, quote } = await asyncVideo("credits-async");
+    expect(await getCreditBalance(workspace.id)).toBe(before - quote);
+    expect(await chargesFor(videoId)).toMatchObject([{ status: "reserved", credits: quote }]);
+
+    expect((await drain(videoId))?.status).toBe("ready");
+    const [charge] = await chargesFor(videoId);
+    expect(charge?.status).toBe("captured");
+    expect(charge!.credits).toBeGreaterThan(0);
+    expect(charge!.credits).toBeLessThanOrEqual(quote);
+    expect(await getCreditBalance(workspace.id)).toBe(before - charge!.credits);
+    const db = await getDb();
+    const [video] = await db.select().from(videos).where(eq(videos.id, videoId));
+    expect(video?.creditsCharged).toBe(charge!.credits);
+
+    // Re-polling and re-settling the finished video changes nothing.
+    const entries = await ledgerCount(workspace.id);
+    await db.update(videos).set({ status: "generating" }).where(eq(videos.id, videoId));
+    await settleVideo(videoId);
+    await processJobs({ videoId, now: new Date(Date.now() + 3_600_000) });
+    expect(await ledgerCount(workspace.id)).toBe(entries);
+    expect(await getCreditBalance(workspace.id)).toBe(before - charge!.credits);
+    expect((await chargesFor(videoId))[0]?.status).toBe("captured");
+  });
+
+  it("releases the whole reservation once when every model times out in the worker", async () => {
+    for (const id of FALLBACK_CHAIN.standard) vi.spyOn(videoProvider(id), "pollClip").mockResolvedValue({ state: "pending" });
+    const { workspace, videoId, before, quote } = await asyncVideo("credits-timeout");
+    expect(await getCreditBalance(workspace.id)).toBe(before - quote);
+
+    let now = Date.now();
+    const db = await getDb();
+    for (let pass = 0; pass < 40; pass += 1) {
+      await processJobs({ videoId, now: new Date(now) });
+      const [video] = await db.select().from(videos).where(eq(videos.id, videoId));
+      if (video?.status !== "generating") break;
+      now += 21 * 60_000;
+    }
+    const [video] = await db.select().from(videos).where(eq(videos.id, videoId));
+    expect(video?.status).toBe("failed");
+    expect(video?.creditsCharged).toBe(0);
+    const jobs = await db.select().from(generationJobs).where(eq(generationJobs.videoId, videoId));
+    expect(jobs.some((job) => job.status === "timed_out")).toBe(true);
+    expect(await chargesFor(videoId)).toMatchObject([{ status: "released" }]);
+    expect(await getCreditBalance(workspace.id)).toBe(before);
+
+    // A second settle pass (a retried tick) refunds nothing more.
+    const entries = await ledgerCount(workspace.id);
+    await db.update(videos).set({ status: "generating" }).where(eq(videos.id, videoId));
+    await settleVideo(videoId);
+    expect(await ledgerCount(workspace.id)).toBe(entries);
+    expect(await getCreditBalance(workspace.id)).toBe(before);
   });
 });

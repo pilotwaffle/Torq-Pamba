@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { requireWorkspace } from "@/lib/auth/guards";
@@ -26,6 +27,8 @@ export async function generateAction(
     hookIndex: Number.isInteger(hook) && hook >= 0 && hook <= 2 ? hook : 0,
   });
   if (!result.ok) return { error: result.error };
+  // The sidebar credit balance lives in the /app layout.
+  revalidatePath("/app", "layout");
   const conversationId = String(formData.get("conversationId") ?? "");
   redirect(z.uuid().safeParse(conversationId).success ? `/app/chat?c=${conversationId}` : "/app/chat");
 }

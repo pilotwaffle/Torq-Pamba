@@ -1,6 +1,16 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
-import { chatMessages, generationAttempts, generationJobs, videoRenders, videos, type GenerationJob } from "@/db/schema";
+import {
+  chatMessages,
+  creditCharges,
+  generationAttempts,
+  generationJobs,
+  videoRenders,
+  videos,
+  type GenerationJob,
+} from "@/db/schema";
+import { captureCredits, releaseCredits } from "@/lib/credits/charges";
+import { creditsForScenes } from "@/lib/credits/pricing";
 import { TIER_MODEL, type Tier } from "@/lib/pricing";
 import { clipRequestOf, type ClipJobResponse } from "./clips";
 import { chargeForScenes, formatAttempts, splitCents, stitch, type AttemptRecord } from "./manifest";
@@ -78,6 +88,8 @@ export async function settleVideo(videoId: string): Promise<void> {
   const states = sceneStates(plan.scenes.length, jobs);
 
   if (states.some((scene) => scene.state === "failed")) {
+    // Settle credits before the status flips, so a retry after a crash still refunds them.
+    for (const chargeId of await reservedCharges(videoId)) await releaseCredits(chargeId);
     await db
       .update(generationJobs)
       .set({ status: "canceled", nextPollAt: null, completedAt: new Date(), updatedAt: new Date() })
@@ -93,6 +105,16 @@ export async function settleVideo(videoId: string): Promise<void> {
   if (states.some((scene) => scene.state === "pending")) return;
 
   const winners = states.map((scene) => (scene.state === "ok" ? scene.job : null)).filter((job): job is GenerationJob => !!job);
+  const tier = (video.tier ?? "standard") as Tier;
+  const models = plan.scenes.map((scene, index) => ({
+    durationS: scene.durationS,
+    model: winners[index]?.provider || TIER_MODEL[tier],
+  }));
+  const charge = chargeForScenes(tier, models);
+  // Capture what actually ran (capped at the reservation) before the render is queued; repeat calls change nothing.
+  for (const chargeId of await reservedCharges(videoId)) {
+    await captureCredits(chargeId, { credits: creditsForScenes(tier, models), costUsd: charge });
+  }
   const [render] = await db
     .insert(generationJobs)
     .values({
@@ -110,12 +132,6 @@ export async function settleVideo(videoId: string): Promise<void> {
     .returning();
   if (!render) return;
 
-  const tier = (video.tier ?? "standard") as Tier;
-  const models = plan.scenes.map((scene, index) => ({
-    durationS: scene.durationS,
-    model: winners[index]?.provider || TIER_MODEL[tier],
-  }));
-  const charge = chargeForScenes(tier, models);
   const shares = splitCents(
     Math.round(charge * 100),
     plan.scenes.map((scene) => scene.durationS),
@@ -143,6 +159,16 @@ export async function settleVideo(videoId: string): Promise<void> {
     .update(videos)
     .set({ model: models[0]?.model ?? TIER_MODEL[tier], manifest, costActualUsd: charge, updatedAt: new Date() })
     .where(eq(videos.id, videoId));
+}
+
+/** The video's credit reservations that are not settled yet (normally the one made by `generateVideo`). */
+async function reservedCharges(videoId: string): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db
+    .select({ id: creditCharges.id })
+    .from(creditCharges)
+    .where(and(eq(creditCharges.videoId, videoId), eq(creditCharges.kind, "clip"), eq(creditCharges.status, "reserved")));
+  return rows.map((row) => row.id);
 }
 
 /** Marks the video ready (with or without a render) and tells the chat if Generate already returned. */

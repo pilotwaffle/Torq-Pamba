@@ -44,6 +44,7 @@ describe("chat tool registry", () => {
     ["voices", ["choose-voice", "clone-voice"]],
     ["editor", ["regenerate-scene"]],
     ["research", ["find-trends", "ideas"]],
+    ["credits", ["credit-balance"]],
   ])("ships the %s chat tools", (_feature, names) => {
     expect(chatTools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(names));
   });

@@ -254,12 +254,12 @@ export default function HomePage() {
           <h2 id="pricing-heading" className="display-serif text-3xl">
             Pricing
           </h2>
-          <p className="mt-3 text-sm text-zinc-700">Placeholder test-mode prices.</p>
+          <p className="mt-3 text-sm text-zinc-700">Test-mode prices. Credits pay for every generation; top up any time.</p>
           <div className="mt-6 grid gap-4 sm:grid-cols-3">
             {PLANS.map((plan) => (
               <div
                 key={plan.id}
-                className={`rounded-xl border bg-white p-5 shadow-sm ${plan.id === "creator" ? "border-emerald-300 ring-1 ring-emerald-200" : "border-zinc-200"}`}
+                className={`rounded-xl border bg-white p-5 shadow-sm ${plan.id === "hobby" ? "border-emerald-300 ring-1 ring-emerald-200" : "border-zinc-200"}`}
               >
                 <h3 className="font-semibold">{plan.name}</h3>
                 <p className="display-serif mt-2 text-3xl">

@@ -72,7 +72,7 @@ export function PageHeader({
 
 export function planLabel(plan: string): string {
   if (plan === "free") return "Free";
-  if (plan === "creator") return "Creator";
-  if (plan === "studio") return "Studio";
+  if (plan === "creator" || plan === "hobby") return "Hobby";
+  if (plan === "studio" || plan === "pro") return "Pro";
   return plan;
 }

@@ -2,6 +2,8 @@ import { and, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { avatars, videos, workspaces } from "@/db/schema";
 import { remainingBudgetUsd } from "@/lib/budget";
+import { attachChargeVideo, holdCredits, releaseCredits } from "@/lib/credits/charges";
+import { quoteClipCredits } from "@/lib/credits/pricing";
 import { enqueueClipJob } from "@/lib/jobs/clips";
 import { inlineWaitMs } from "@/lib/jobs/config";
 import { attemptSummaryForVideo, type GenerationPlan } from "@/lib/jobs/settle";
@@ -86,6 +88,20 @@ export async function generateVideo(input: {
   }
 
   const plan: GenerationPlan = { hook: input.hook, scenes: input.scenes, voiceLines: input.voiceLines };
+
+  // Credits: reserve the quoted price now, capture when the clips finish (see settleVideo), release on failure.
+  const hold = await holdCredits({
+    workspaceId: workspace.id,
+    kind: "clip",
+    credits: quoteClipCredits({ tier: input.tier, durationS }).total,
+    description: `Video: ${input.title || "Untitled"} (${input.tier}, ${durationS}s)`,
+    model: TIER_MODEL[input.tier],
+    units: durationS,
+    costUsd: estimate.total,
+  });
+  if (!hold.ok) return { ok: false, error: hold.error };
+  const release = () => releaseCredits(hold.chargeId);
+
   const [video] = await db
     .insert(videos)
     .values({
@@ -100,10 +116,18 @@ export async function generateVideo(input: {
       costEstimate: estimate,
       aiGenerated: workspace.aiDisclosureDefault,
     })
-    .returning();
-  if (!video) return { ok: false, error: "Could not start generation" };
+    .returning()
+    .catch(async (error: unknown) => {
+      await release();
+      throw error;
+    });
+  if (!video) {
+    await release();
+    return { ok: false, error: "Could not start generation" };
+  }
 
   try {
+    await attachChargeVideo(hold.chargeId, video.id);
     const chain = [...FALLBACK_CHAIN[input.tier]];
     for (const [index, scene] of input.scenes.entries()) {
       await enqueueClipJob({
@@ -125,6 +149,7 @@ export async function generateVideo(input: {
       .update(videos)
       .set({ status: "failed", costActualUsd: 0, updatedAt: new Date() })
       .where(eq(videos.id, video.id));
+    await release();
     throw error;
   }
 

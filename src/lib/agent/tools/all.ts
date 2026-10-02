@@ -3,6 +3,7 @@ export { approveVideoTool } from "./approve-video";
 export { brandBriefTool } from "./brand-brief";
 export { chooseVoiceTool } from "./choose-voice";
 export { cloneVoiceTool } from "./clone-voice";
+export { creditBalanceTool } from "./credit-balance";
 export { estimateCostTool } from "./estimate-cost";
 export { findTrendsTool } from "./find-trends";
 export { ideasTool } from "./ideas";
