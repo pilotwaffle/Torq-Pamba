@@ -3,12 +3,19 @@ import Stripe from "stripe";
 import { getDb } from "@/db";
 import { workspaces, type Workspace } from "@/db/schema";
 import { writeAudit } from "@/lib/audit";
+import { allowsInsecureLocalEndpoints } from "@/lib/local-mode";
 
 export class BillingError extends Error {
+  readonly status: number = 400;
+
   constructor(message: string) {
     super(message);
     this.name = "BillingError";
   }
+}
+
+export class WebhookUnauthorizedError extends BillingError {
+  override readonly status = 401;
 }
 
 export type PaidPlan = "creator" | "studio";
@@ -183,8 +190,10 @@ function parseUnsignedEvent(payload: string): Stripe.Event {
 export async function handleWebhook(payload: string, signature: string | null): Promise<{ applied: boolean }> {
   assertTestMode();
   const secret = process.env.STRIPE_WEBHOOK_SECRET?.trim() ?? "";
-  // Unsigned bodies are accepted only when STRIPE_WEBHOOK_SECRET is unset.
   let event: Stripe.Event;
+  if (!secret && !allowsInsecureLocalEndpoints()) {
+    throw new WebhookUnauthorizedError("STRIPE_WEBHOOK_SECRET is not set; refusing unsigned webhooks");
+  }
   if (secret) {
     if (!signature) throw new BillingError("Missing Stripe signature");
     try {

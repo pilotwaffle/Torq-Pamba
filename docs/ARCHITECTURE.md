@@ -54,8 +54,10 @@ The status enum also includes `draft` and `planned`. The chat path inserts the r
 4. Chat: `handleUserMessage` parses the text. A video request stores a plan and an itemized `estimateClipCost` (script, frames, video, voice, total). Nothing is generated until `generateFromMessage` runs from the Generate button.
 5. Generate: `generateVideo` compares the estimate with the remaining monthly budget, inserts a `generating` row, and runs the three scenes with `Promise.all` through `FALLBACK_CHAIN` for the chosen tier. Each attempt is inserted. On full success the router writes a stitched manifest (ordered scenes, duration, caption track, hook) and `cost_actual_usd`. On failure the video is `failed` and the cost stays 0.
 6. Approval: `canApprove` requires a privacy value, music consent, and schedule consent. Commercial disclosure requires a type. Clearing the AI label requires `confirmAiOff`. `approveVideo` writes the approval JSON and the audit row.
-7. Schedule: the user picks a datetime or the next 09:00 / 12:00 / 18:00. Only an approved video can be queued. `POST /api/cron/tick` (Bearer `CRON_SECRET` when that variable is set) calls `processDueItems`, which sets due rows to `due_manual`.
+7. Schedule: the user picks a datetime or the next 09:00 / 12:00 / 18:00. Only an approved video can be queued. `POST /api/cron/tick` (Bearer `CRON_SECRET`) calls `processDueItems`, which sets due rows to `due_manual`.
 
-Stripe checkout is `POST /api/billing/checkout`. It creates a test-mode Checkout Session when `STRIPE_SECRET_KEY` is an `sk_test_` key and the price id is set. Otherwise it marks the workspace plan in the database and tells the UI the upgrade was simulated. `POST /api/billing/webhook` checks `STRIPE_WEBHOOK_SECRET` when that variable is set.
+Stripe checkout is `POST /api/billing/checkout`. It creates a test-mode Checkout Session when `STRIPE_SECRET_KEY` is an `sk_test_` key and the price id is set. Otherwise it marks the workspace plan in the database and tells the UI the upgrade was simulated. `POST /api/billing/webhook` verifies the signature with `STRIPE_WEBHOOK_SECRET`.
+
+Both machine endpoints fail closed. With `CRON_SECRET` or `STRIPE_WEBHOOK_SECRET` unset they return 401, unless `ALLOW_INSECURE_LOCAL_ENDPOINTS=1` and `NODE_ENV` is not `production` (`src/lib/local-mode.ts`).
 
 The monthly budget sums `generation_attempts.cost_usd` for rows with status `ok` since the start of the month in the workspace timezone.

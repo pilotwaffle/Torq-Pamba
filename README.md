@@ -198,8 +198,9 @@ Every variable in `.env.example`. Empty means the default in the last column. Do
 | `STRIPE_SECRET_KEY` | No | empty | Stripe test secret (`sk_test_…`). A value starting with `sk_live_` throws and checkout does not start. With no key, billing simulates a test-mode upgrade and labels it simulated |
 | `STRIPE_PRICE_CREATOR` | No | empty | Stripe Price id for the Creator plan. Required only when a test secret is set and someone checks out Creator |
 | `STRIPE_PRICE_STUDIO` | No | empty | Stripe Price id for the Studio plan. Same rule as Creator |
-| `STRIPE_WEBHOOK_SECRET` | No | empty | Verifies `POST /api/billing/webhook`. When empty, the webhook does not require a signature |
-| `CRON_SECRET` | No | empty | When set, `POST /api/cron/tick` requires `Authorization: Bearer <secret>`. When empty, the tick is open |
+| `STRIPE_WEBHOOK_SECRET` | For the webhook | empty | Verifies `POST /api/billing/webhook`. When empty, the webhook returns 401 unless `ALLOW_INSECURE_LOCAL_ENDPOINTS=1` outside production |
+| `CRON_SECRET` | For the cron tick | empty | `POST /api/cron/tick` requires `Authorization: Bearer <secret>`. When empty, the tick returns 401 unless `ALLOW_INSECURE_LOCAL_ENDPOINTS=1` outside production |
+| `ALLOW_INSECURE_LOCAL_ENDPOINTS` | No | empty | Set to `1` on a local machine to run the cron tick and the webhook without their secrets. Ignored when `NODE_ENV` is `production` |
 
 `npm run capture` sets `CAPTURE=1` itself. That variable is not part of app configuration.
 

@@ -9,7 +9,9 @@ export async function POST(request: Request) {
     const result = await handleWebhook(payload, request.headers.get("stripe-signature"));
     return NextResponse.json({ received: true, applied: result.applied });
   } catch (error) {
-    const message = error instanceof BillingError ? error.message : "Invalid webhook";
-    return NextResponse.json({ error: message }, { status: 400 });
+    if (error instanceof BillingError) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
+    }
+    return NextResponse.json({ error: "Invalid webhook" }, { status: 400 });
   }
 }
