@@ -8,7 +8,7 @@ const sections: { title: string; paragraphs: string[]; list?: string[] }[] = [
     title: "The service",
     paragraphs: [
       "Torq-Pamba is a studio for making short AI-generated videos for a brand, getting a person to approve them, and placing approved videos on a schedule.",
-      "The service does not publish videos to TikTok, Instagram, or Facebook. When a scheduled time arrives, the item is marked ready for you to publish manually. A later phase may send videos through those platforms' official APIs after their app review. That phase is not available today, and the product never posts from a device.",
+      "The service publishes only videos you approved, only to TikTok, Instagram, or Facebook accounts you connected, and only through those platforms' official APIs. When a scheduled item has no connected account, it is marked ready for you to publish manually. The product never posts from a device.",
     ],
   },
   {

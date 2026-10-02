@@ -24,7 +24,7 @@ export default async function ChatPage({
     <main className="max-w-4xl">
       <PageHeader
         title="Chat"
-        description="Plan a clip, see the price, then generate. Torq-Pamba does not publish it."
+        description="Plan a clip, see the price, then generate. Nothing is published until you approve it."
       />
       <ChatThread messages={messages} flashError={params.error} />
     </main>

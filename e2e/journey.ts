@@ -4,7 +4,7 @@ export const DEMO_URL = "http://localhost:3100/demo-site";
 export const VIDEO_PROMPT =
   "Make a 30s video about our oat-milk cold brew for busy commuters";
 
-const PASSWORD = "correct-horse";
+export const PASSWORD = "correct-horse";
 
 export function uniqueEmail(label: string): string {
   return `${label}-${Date.now()}-${Math.random().toString(16).slice(2)}@example.com`;
