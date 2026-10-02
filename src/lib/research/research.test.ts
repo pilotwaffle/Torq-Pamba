@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getDb } from "@/db";
 import { auditLog, ideas as ideasTable, videos, workspaces, type BrandBrief, type Workspace } from "@/db/schema";
+import { listConversationMessages } from "@/lib/agent/conversation";
 import { isPlanMessage } from "@/lib/agent/plan";
 import { generateFromMessage, handleUserMessage, listChat } from "@/lib/agent/run";
 import { chatTools } from "@/lib/agent/tools/registry";
@@ -214,7 +215,10 @@ describe("make this video", () => {
     const { workspace, userId } = await workspaceWithBrief("handoff");
     const { ideas } = await generateIdeas({ workspace, userId, count: 2 });
     const idea = ideas[0]!;
-    await makeVideoFromIdea({ workspace, userId, ideaId: idea.id });
+    // The user already has a chat thread; the idea still lands in a thread the chat page can open.
+    const earlier = await handleUserMessage({ workspace, userId, text: "hello" });
+    const { conversationId } = await makeVideoFromIdea({ workspace, userId, ideaId: idea.id });
+    expect(conversationId).not.toBe(earlier?.conversationId);
 
     const chat = await listChat(workspace.id);
     expect(chat.at(-2)).toMatchObject({ role: "user", content: `Make a 30s video about ${idea.title.replace(/[.!?…]+$/u, "")}` });
@@ -227,12 +231,16 @@ describe("make this video", () => {
     expect(new Set(plan.hooks).size).toBe(3);
     expect(plan.durationS).toBe(30);
     expect((await getIdea(workspace.id, idea.id))?.status).toBe("used");
+    const thread = await listConversationMessages(workspace.id, conversationId);
+    expect(thread.map((message) => message.id)).toEqual([chat.at(-2)!.id, planMessage.id]);
 
     // Nothing is generated until the user clicks Generate on the plan card.
     const db = await getDb();
     expect(await db.select().from(videos).where(eq(videos.workspaceId, workspace.id))).toEqual([]);
     const generated = await generateFromMessage({ workspaceId: workspace.id, userId, messageId: planMessage.id, tier: "standard", hookIndex: 0 });
     expect(generated.ok).toBe(true);
+    // The "ready" message joins the idea's thread too.
+    expect((await listConversationMessages(workspace.id, conversationId)).at(-1)?.data).toMatchObject({ kind: "ready" });
     const view = await listIdeas(workspace.id);
     const linked = view.find((row) => row.id === idea.id);
     expect(linked?.videoId).toBe(generated.ok ? generated.videoId : null);

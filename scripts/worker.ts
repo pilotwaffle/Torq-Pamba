@@ -12,7 +12,7 @@ async function main() {
   while (!stopping) {
     try {
       const result = await processJobs();
-      if (result.processed > 0) console.log(`worker: ${result.clips} clip, ${result.renders} render, ${result.errors} errors`);
+      if (result.processed > 0) console.log(`worker: ${result.clips} clip, ${result.renders} render, ${result.voice} voice, ${result.errors} errors`);
     } catch (error) {
       console.error("worker: pass failed", error);
     }

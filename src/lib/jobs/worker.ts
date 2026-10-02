@@ -1,12 +1,13 @@
 import { and, asc, eq, inArray, isNull, lte, or } from "drizzle-orm";
 import { getDb } from "@/db";
 import { generationJobs, videos, type GenerationJob } from "@/db/schema";
+import { pollDueVoiceJobs } from "@/lib/voices/pipeline";
 import { advanceClipJob } from "./clips";
 import { CLAIM_LEASE_MS } from "./config";
 import { advanceRenderJob } from "./render";
 import { ACTIVE_JOB_STATUSES, settleVideo } from "./settle";
 
-export type ProcessResult = { processed: number; clips: number; renders: number; errors: number };
+export type ProcessResult = { processed: number; clips: number; renders: number; voice: number; errors: number };
 
 /** Takes a job for this worker by pushing `next_poll_at` out; another worker that read the same row loses the race. */
 async function claim(job: GenerationJob, now: Date): Promise<boolean> {
@@ -27,8 +28,10 @@ async function claim(job: GenerationJob, now: Date): Promise<boolean> {
 
 /**
  * One worker pass: every due clip and render job (optionally for one video)
- * moves one step, then the videos they belong to are settled. Called by the
- * cron tick, `npm run worker`, and inline by Generate.
+ * moves one step, then the videos they belong to are settled. A pass over all
+ * videos also polls due voice-feature lip-sync jobs (`pollDueVoiceJobs`; voice
+ * and voice-clone jobs finish inline). Called by the cron tick,
+ * `npm run worker`, and inline by Generate for one video.
  */
 export async function processJobs(options: { now?: Date; videoId?: string; limit?: number } = {}): Promise<ProcessResult> {
   const now = options.now ?? new Date();
@@ -47,7 +50,7 @@ export async function processJobs(options: { now?: Date; videoId?: string; limit
     .orderBy(asc(generationJobs.nextPollAt))
     .limit(options.limit ?? 25);
 
-  const result: ProcessResult = { processed: 0, clips: 0, renders: 0, errors: 0 };
+  const result: ProcessResult = { processed: 0, clips: 0, renders: 0, voice: 0, errors: 0 };
   const touched = new Set<string>();
   const clipJobs = due.filter((job) => job.kind === "clip");
   // Clip jobs wait on the network, so they run side by side; renders are CPU-bound and run one at a time.
@@ -77,6 +80,17 @@ export async function processJobs(options: { now?: Date; videoId?: string; limit
       console.error("render job failed", job.id, error);
     }
     result.processed += 1;
+  }
+
+  // The voices feature owns its `lipsync` jobs; the clip and render kinds above are never passed to it.
+  if (!options.videoId) {
+    try {
+      result.voice = await pollDueVoiceJobs(now);
+      result.processed += result.voice;
+    } catch (error) {
+      result.errors += 1;
+      console.error("voice jobs failed", error);
+    }
   }
   return result;
 }

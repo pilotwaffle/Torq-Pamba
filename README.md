@@ -177,7 +177,7 @@ Open [http://localhost:3000](http://localhost:3000), create an account, and onbo
 | `npm run db:generate` | `drizzle-kit generate` into `./drizzle` |
 | `npm run db:migrate` | Apply `./drizzle` (PGlite, or Postgres when `DATABASE_URL` is set) |
 | `npm run setup` | Copy `.env.example` to `.env.local` if needed, then migrate |
-| `npm run worker` | Poll generation jobs (clip submit/poll/download, final render) outside any request. `POST /api/cron/tick` does the same work once per tick |
+| `npm run worker` | Poll generation jobs (clip submit/poll/download, final render, lip-sync) outside any request. `POST /api/cron/tick` does the same work once per tick |
 
 ## Environment variables
 

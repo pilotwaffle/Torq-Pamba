@@ -122,10 +122,11 @@ export async function setIdeaStatusAction(formData: FormData) {
 
 export async function makeVideoAction(formData: FormData) {
   const { user, workspace } = await requireWorkspace();
+  let conversationId = "";
   try {
-    await makeVideoFromIdea({ workspace, userId: user.id, ideaId: field(formData, "ideaId") });
+    ({ conversationId } = await makeVideoFromIdea({ workspace, userId: user.id, ideaId: field(formData, "ideaId") }));
   } catch (error) {
     back("/app/research", { error: userMessage(error, "Could not plan that video") });
   }
-  redirect("/app/chat");
+  redirect(`/app/chat?c=${conversationId}`);
 }

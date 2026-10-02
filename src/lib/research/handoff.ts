@@ -1,5 +1,6 @@
 import { getDb } from "@/db";
 import { chatMessages, type Workspace } from "@/db/schema";
+import { createConversation, touchConversation } from "@/lib/agent/conversation";
 import { isPlanMessage } from "@/lib/agent/plan";
 import { planTool } from "@/lib/agent/tools/plan";
 import type { ChatToolContext } from "@/lib/agent/tools/types";
@@ -28,18 +29,26 @@ export function withIdeaHook(hooks: readonly string[], hook: string | null): [st
  * existing plan tool, so the user lands on the usual plan card with the cost
  * preview and Generate button. Nothing is generated or charged here. The plan
  * carries the idea id so the video can be linked back once it is generated.
+ * Each idea gets its own chat thread; open it at `/app/chat?c=<conversationId>`.
  */
-export async function makeVideoFromIdea(input: { workspace: Workspace; userId: string; ideaId: string }): Promise<void> {
+export async function makeVideoFromIdea(input: {
+  workspace: Workspace;
+  userId: string;
+  ideaId: string;
+}): Promise<{ conversationId: string }> {
   const idea = await getIdea(input.workspace.id, input.ideaId);
   if (!idea) throw new ResearchError("That idea is not in this workspace");
   const text = ideaRequest(idea.title);
+  const conversation = await createConversation(input.workspace.id, input.userId);
   const db = await getDb();
   await db.insert(chatMessages).values({
     workspaceId: input.workspace.id,
     userId: input.userId,
+    conversationId: conversation.id,
     role: "user",
     content: text,
   });
+  await touchConversation(conversation, { firstText: text });
   const ctx: ChatToolContext = {
     workspace: input.workspace,
     userId: input.userId,
@@ -54,6 +63,7 @@ export async function makeVideoFromIdea(input: { workspace: Workspace; userId: s
       await db.insert(chatMessages).values({
         workspaceId: input.workspace.id,
         userId: input.userId,
+        conversationId: conversation.id,
         role: "assistant",
         content,
         data: stored,
@@ -68,4 +78,5 @@ export async function makeVideoFromIdea(input: { workspace: Workspace; userId: s
     action: "research.idea_planned",
     data: { ideaId: idea.id, title: idea.title },
   });
+  return { conversationId: conversation.id };
 }

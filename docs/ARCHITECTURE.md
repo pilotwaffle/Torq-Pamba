@@ -17,7 +17,7 @@ Torq-Pamba is a Next.js App Router app. Pages and server actions handle HTTP. Ru
 | `src/lib/models` | Per-model catalog, one file per vendor: list price with its source, tier, fallback-chain position, avatar plan. Pure data, safe in client components |
 | `src/lib/pricing` and `src/lib/router` | Cost estimates and fallback chains derived from the catalog, parallel scene generation, stitch, budget cap, charge on success |
 | `src/lib/providers` | Vendor adapters (one file each, listed in `adapters.ts`), the registry, and the mock provider |
-| `src/lib/jobs` | The generation job queue: clip jobs (submit, poll, download, retry, timeout, next model in the chain), settle and charge, render jobs, and `processJobs` for the cron tick and `npm run worker` |
+| `src/lib/jobs` | The generation job queue: clip jobs (submit, poll, download, retry, timeout, next model in the chain), settle and charge, render jobs, and `processJobs` for the cron tick and `npm run worker` (which also polls the voices feature's lip-sync jobs) |
 | `src/lib/media` | Media storage (`local` disk or an S3-compatible bucket by `MEDIA_STORAGE`), `media_assets` rows, the ffmpeg wrapper, mock clips, and the stitcher that writes the final MP4 |
 | `src/lib/approval.ts` | The gate. Privacy has no default. Consents start unchecked. The AI label starts on |
 | `src/lib/schedule.ts` | Slots at 09:00, 12:00, and 18:00 in the workspace timezone. `processDueItems` sets `due_manual`. There is no publish function |
@@ -101,7 +101,7 @@ For the video pipeline, import from `@/lib/voices`:
 | `speakLine({ workspaceId, text, voiceId?, avatarId?, model?, videoId? })` → `VoiceTrack` | TTS in the given voice, else the avatar's, else the first stock voice. Writes a `voice` job and an audio asset (`data:` URL, inline). On failure the job is `failed` or `refused` at cost 0 and the error is rethrown |
 | `lipsyncLine({ workspaceId, avatarId, text? \| audio?, model?, videoId? })` → `TalkingClip` | Voices `text` (or reuses `audio`) and starts a `lipsync` job. Mock engines return `succeeded` at once (`image/svg+xml`); vendor jobs return `running` with `next_poll_at` set and a 20-minute deadline |
 | `refreshLipsyncJob({ workspaceId, jobId })` → `TalkingClip` | Polls a running job once; stores the MP4 as an `external` asset on success, charges nothing on failure or timeout |
-| `pollDueVoiceJobs(now?)` → count | Polls every due `lipsync` job. Call it from the job poller in the cron tick |
+| `pollDueVoiceJobs(now?)` → count | Polls every due `lipsync` job. `processJobs` calls it on every all-videos pass (cron tick and `npm run worker`) |
 | `voiceTrackFromJob(workspaceId, jobId)` | Rebuilds a `VoiceTrack` from a finished `voice` job |
 
 `VoiceTrack` carries `jobId`, `assetId`, `url`, `mimeType`, `durationMs`, `costUsd`, and `mock`. `TalkingClip` adds `status` (`running` \| `succeeded` \| `failed`), the clip `assetId`, `url`, `mimeType`, `posterUrl`, and the `audio` track; when `mimeType` is not a video, play `audio` beside it. The editor can store `audio.assetId` on `scene_takes.voice_asset_id`, `jobId` on `lipsync_job_id`, and `assetId` on `lipsync_asset_id`. Costs are recorded on `generation_jobs.cost_usd` only; credit reservation belongs to the credits feature.

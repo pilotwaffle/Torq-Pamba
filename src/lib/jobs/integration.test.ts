@@ -1,17 +1,20 @@
 import { and, asc, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getDb } from "@/db";
-import { chatMessages, creditCharges, creditLedger, generationJobs, sceneTakes, videos } from "@/db/schema";
+import { chatMessages, creditCharges, creditLedger, generationAttempts, generationJobs, sceneTakes, videos } from "@/db/schema";
 import { isPlanMessage } from "@/lib/agent/plan";
 import { generateFromMessage, handleUserMessage, listChat } from "@/lib/agent/run";
 import { signupAccount } from "@/lib/auth/account";
+import { saveStockAvatar } from "@/lib/avatars/store";
 import { getCreditBalance } from "@/lib/credits/ledger";
 import { quoteClipCredits } from "@/lib/credits/pricing";
 import { regenerateScene } from "@/lib/editor/regenerate";
 import { loadEditor } from "@/lib/editor/store";
 import { resetMockRefusals } from "@/lib/providers/mock";
-import { videoProvider } from "@/lib/providers/registry";
+import { registry, videoProvider } from "@/lib/providers/registry";
 import { FALLBACK_CHAIN, generateVideo } from "@/lib/router";
+import { lipsyncLine, pollDueVoiceJobs } from "@/lib/voices/pipeline";
+import type { LipsyncProvider } from "@/lib/voices/types";
 import { renderInputFor } from "./render";
 import { settleVideo } from "./settle";
 import { processJobs } from "./worker";
@@ -207,5 +210,68 @@ describe("credits x video jobs", () => {
     await settleVideo(videoId);
     expect(await ledgerCount(workspace.id)).toBe(entries);
     expect(await getCreditBalance(workspace.id)).toBe(before);
+  });
+});
+
+describe("voices x job poller", () => {
+  it("advances a due lip-sync job through processJobs, the entry point of the cron tick and the worker", async () => {
+    const { user, workspace } = await signupAccount({
+      email: `voice-poll-${Date.now()}-${Math.random().toString(16).slice(2)}@example.com`,
+      password: "correct-horse-battery",
+      workspaceName: "Voice poll Co",
+    });
+    const avatar = await saveStockAvatar({ workspaceId: workspace.id, actorUserId: user.id, avatarId: "mina-cole" });
+    // A vendor job that is still running after submit, like a live HeyGen render.
+    const engine = registry.get("lipsync", "heygen-avatar-iv");
+    const slow: LipsyncProvider = {
+      ...engine,
+      isLive: () => true,
+      submit: async () => ({ providerJobId: `slow_${crypto.randomUUID()}`, status: "running" }),
+    };
+    const running = await lipsyncLine({
+      workspaceId: workspace.id,
+      avatarId: avatar.id,
+      text: "Still going.",
+      resolve: { lipsync: () => slow },
+    });
+    expect(running.status).toBe("running");
+
+    // A clip job that is due in the same tick, to check each poller keeps to its own kinds.
+    const clipVideo = await generateVideo({
+      workspaceId: workspace.id,
+      tier: "standard",
+      title: "Clip",
+      prompt: "voice tick cold brew",
+      hook: "Hook",
+      voiceLines: ["a"],
+      scenes: [{ visual: "kitchen", line: "Cold brew", durationS: 2 }],
+      waitMs: 0,
+    });
+    if (!clipVideo.ok) throw new Error(clipVideo.error);
+    const db = await getDb();
+    const clipJobs = async () =>
+      db.select().from(generationJobs).where(and(eq(generationJobs.videoId, clipVideo.videoId), eq(generationJobs.kind, "clip")));
+    const clipsBefore = await clipJobs();
+    // Now the clip jobs are due but the lip-sync job is not: c's poller polls nothing and leaves the clips alone.
+    expect(clipsBefore.some((job) => ["queued", "submitted", "running"].includes(job.status))).toBe(true);
+    expect(await pollDueVoiceJobs(new Date())).toBe(0);
+    expect(await clipJobs()).toEqual(clipsBefore);
+
+    // A pass for one video (Generate's inline drive) leaves voice jobs alone.
+    const poll = vi.spyOn(engine, "poll").mockResolvedValue({
+      status: "succeeded",
+      output: { url: "https://cdn.example.com/talk.mp4", mimeType: "video/mp4", durationMs: 2000, posterUrl: null },
+    });
+    await processJobs({ videoId: clipVideo.videoId, now: new Date(Date.now() + 60_000) });
+    expect(poll).not.toHaveBeenCalled();
+
+    const result = await processJobs({ now: new Date(Date.now() + 60_000) });
+    expect(result.voice).toBeGreaterThanOrEqual(1);
+    expect(poll).toHaveBeenCalled();
+    const [job] = await db.select().from(generationJobs).where(eq(generationJobs.id, running.jobId));
+    expect(job).toMatchObject({ kind: "lipsync", status: "succeeded" });
+    expect(job?.outputAssetId).toBeTruthy();
+    // a's clip pipeline recorded nothing for it.
+    expect(await db.select().from(generationAttempts).where(eq(generationAttempts.jobId, running.jobId))).toEqual([]);
   });
 });
