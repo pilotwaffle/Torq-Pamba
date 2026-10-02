@@ -250,7 +250,11 @@ describe("voices x job poller", () => {
     if (!clipVideo.ok) throw new Error(clipVideo.error);
     const db = await getDb();
     const clipJobs = async () =>
-      db.select().from(generationJobs).where(and(eq(generationJobs.videoId, clipVideo.videoId), eq(generationJobs.kind, "clip")));
+      db
+        .select()
+        .from(generationJobs)
+        .where(and(eq(generationJobs.videoId, clipVideo.videoId), eq(generationJobs.kind, "clip")))
+        .orderBy(asc(generationJobs.id));
     const clipsBefore = await clipJobs();
     // Now the clip jobs are due but the lip-sync job is not: c's poller polls nothing and leaves the clips alone.
     expect(clipsBefore.some((job) => ["queued", "submitted", "running"].includes(job.status))).toBe(true);

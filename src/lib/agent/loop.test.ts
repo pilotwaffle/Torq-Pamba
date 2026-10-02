@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { getDb } from "@/db";
 import { chatMessages, chatToolCalls, conversations, videos } from "@/db/schema";
@@ -105,7 +105,11 @@ describe("agent loop", () => {
     expect(thread?.model).toBe("claude-test");
     expect(thread?.title).toBe("Write me a script about our cold brew");
 
-    const rows = await db.select().from(chatMessages).where(eq(chatMessages.conversationId, thread?.id ?? ""));
+    const rows = await db
+      .select()
+      .from(chatMessages)
+      .where(eq(chatMessages.conversationId, thread?.id ?? ""))
+      .orderBy(asc(chatMessages.createdAt));
     expect(rows.every((row) => row.conversationId === thread?.id)).toBe(true);
     const plan = rows.find((row) => isPlanMessage(row.data));
     expect(plan && isPlanMessage(plan.data) ? plan.data.plan.title : null).toBe("Cold Brew Commute");
@@ -141,7 +145,7 @@ describe("agent loop", () => {
 
     const db = await getDb();
     expect(await db.select().from(videos).where(eq(videos.workspaceId, workspace.id))).toHaveLength(0);
-    const [call] = await db.select().from(chatToolCalls).where(eq(chatToolCalls.callId, "toolu_g"));
+    const [call] = await db.select().from(chatToolCalls).where(and(eq(chatToolCalls.workspaceId, workspace.id), eq(chatToolCalls.callId, "toolu_g")));
     expect(call?.status).toBe("awaiting_confirmation");
     expect(call?.arguments.planMessageId).toEqual(expect.any(String));
     expect(seen).toHaveLength(3);
@@ -177,13 +181,13 @@ describe("agent loop", () => {
     await handleUserMessage({ workspace, userId: user.id, text: "Write a script", model });
     await handleUserMessage({ workspace, userId: user.id, text: "Generate", model });
     const db = await getDb();
-    const [first] = await db.select().from(chatToolCalls).where(eq(chatToolCalls.callId, "toolu_g1"));
+    const [first] = await db.select().from(chatToolCalls).where(and(eq(chatToolCalls.workspaceId, workspace.id), eq(chatToolCalls.callId, "toolu_g1")));
     await resolveToolCall({ workspace, userId: user.id, toolCallId: first?.id ?? "", decision: "reject", model, emit: () => {} });
     expect(results(seen[3]).at(-1)).toMatchObject({ tool_use_id: "toolu_g1", is_error: true });
 
     await handleUserMessage({ workspace, userId: user.id, text: "Generate", model });
     await handleUserMessage({ workspace, userId: user.id, text: "Actually, change the hook first", model });
-    const [second] = await db.select().from(chatToolCalls).where(eq(chatToolCalls.callId, "toolu_g2"));
+    const [second] = await db.select().from(chatToolCalls).where(and(eq(chatToolCalls.workspaceId, workspace.id), eq(chatToolCalls.callId, "toolu_g2")));
     expect(second?.status).toBe("rejected");
     expect(results(seen[5]).at(-1)).toMatchObject({ tool_use_id: "toolu_g2", is_error: true });
     expect(await db.select().from(videos).where(eq(videos.workspaceId, workspace.id))).toHaveLength(0);
@@ -201,7 +205,7 @@ describe("agent loop", () => {
       () => [say("Approved.")],
     ]);
     await handleUserMessage({ workspace, userId: user.id, text: "Approve it, only me", model });
-    const [call] = await db.select().from(chatToolCalls).where(eq(chatToolCalls.callId, "toolu_ap"));
+    const [call] = await db.select().from(chatToolCalls).where(and(eq(chatToolCalls.workspaceId, workspace.id), eq(chatToolCalls.callId, "toolu_ap")));
     expect(call?.arguments.videoId).toBe(video?.id);
     const base = { workspace, userId: user.id, toolCallId: call?.id ?? "", decision: "confirm" as const, model, emit: () => {} };
     expect(await resolveToolCall({ ...base, acknowledged: ["I consent to schedule this video"] })).toEqual({
