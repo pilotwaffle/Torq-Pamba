@@ -12,6 +12,7 @@ Torq-Pamba is a Next.js App Router app. Pages and server actions handle HTTP. Ru
 | `src/lib/auth` | Email and scrypt password, session cookie `tp_session` (httpOnly, SameSite=Lax), `requireUser` and `requireWorkspace` |
 | `src/lib/onboarding` | Fetch a public page, extract a brand profile, save the brief, import assets, record rights |
 | `src/lib/avatars` | Eight stock SVG avatars, niche shortlist, text-to-portrait generation, workspace exclusivity |
+| `src/lib/voices` | Stock voice catalog, a voice and lip-sync engine per avatar, text-to-speech and lip-sync jobs, consent-gated voice clones. See "Voices and lip-sync" |
 | `src/lib/agent` | A chat turn: `tools/` holds one file per chat tool (plan, schedule, list-schedule); `run.ts` matches the message to a tool and runs it |
 | `src/lib/models` | Per-model catalog, one file per vendor: list price with its source, tier, fallback-chain position, avatar plan. Pure data, safe in client components |
 | `src/lib/pricing` and `src/lib/router` | Cost estimates and fallback chains derived from the catalog, parallel scene generation, stitch, budget cap, charge on success |
@@ -80,6 +81,26 @@ Stripe checkout is `POST /api/billing/checkout`. It creates a test-mode Checkout
 Both machine endpoints fail closed. With `CRON_SECRET` or `STRIPE_WEBHOOK_SECRET` unset they return 401, unless `ALLOW_INSECURE_LOCAL_ENDPOINTS=1` and `NODE_ENV` is not `production` (`src/lib/local-mode.ts`).
 
 The monthly budget sums `generation_attempts.cost_usd` for rows with status `ok` since the start of the month in the workspace timezone.
+
+## Voices and lip-sync
+
+`src/lib/voices/types.ts` declares two provider kinds through `ProviderKinds`: `voice` (`VoiceProvider`: synthesize, clone, delete, hosted preview) and `lipsync` (`LipsyncProvider`: submit a portrait plus audio, poll the vendor job). `providers/elevenlabs.ts` registers `elevenlabs-v3` and `elevenlabs-flash` (priced from `models/elevenlabs.ts`; `POST /v1/text-to-speech/{voice_id}`, `POST /v1/voices/add`, `GET` and `DELETE /v1/voices/{voice_id}`). `providers/heygen-lipsync.ts` registers `heygen-avatar-iv` (priced from the catalog's HeyGen Avatar IV entry; `POST /v3/assets`, `POST /v3/videos` with `type: "image"` and the audio, `GET /v3/videos/{id}`). Both mock unless `PROVIDER_MODE=live` and `ELEVENLABS_API_KEY` or `HEYGEN_API_KEY` is set. Mock speech is a real 8 kHz WAV whose tone bursts follow the syllables of the text; the mock talking clip is the avatar's SVG with a mouth that opens on the same syllables, played beside the audio.
+
+The eight stock voices (`voices/catalog.ts`) map the legacy `avatars.voice_id` labels to ElevenLabs default voices and are inserted into `voices` (with `workspace_id` null) on first use, so no migration seeds them. ElevenLabs retires its Default voices on 2026-12-31; remap `providerVoiceId` before then. An avatar speaks with `avatars.tts_voice_id`, or the stock voice for its legacy label, and lip-syncs with `avatars.lipsync_model` (default `heygen-avatar-iv`).
+
+Cloning (`voices/clone.ts`, `POST /api/voices/clones`) needs a voice name, the speaker's name, whose voice it is (`self` or `permission`), the consent checkbox, and one to three audio samples (format sniffed from the bytes, 5 MB each). Without consent `ConsentRequiredError` is thrown before anything is written. With consent the statement, user, and time go on `voice_clones`, samples become `media_assets` linked by `voice_clone_samples`, an audit row is written, and only then is the provider called. A failure leaves the clone `failed` with no voice. Revoking archives the voice, clears it from avatars, and deletes it at the vendor. The `clone-voice` chat tool only creates an `awaiting_consent` draft.
+
+For the video pipeline, import from `@/lib/voices`:
+
+| Function | Does |
+|---|---|
+| `speakLine({ workspaceId, text, voiceId?, avatarId?, model?, videoId? })` → `VoiceTrack` | TTS in the given voice, else the avatar's, else the first stock voice. Writes a `voice` job and an audio asset (`data:` URL, inline). On failure the job is `failed` or `refused` at cost 0 and the error is rethrown |
+| `lipsyncLine({ workspaceId, avatarId, text? \| audio?, model?, videoId? })` → `TalkingClip` | Voices `text` (or reuses `audio`) and starts a `lipsync` job. Mock engines return `succeeded` at once (`image/svg+xml`); vendor jobs return `running` with `next_poll_at` set and a 20-minute deadline |
+| `refreshLipsyncJob({ workspaceId, jobId })` → `TalkingClip` | Polls a running job once; stores the MP4 as an `external` asset on success, charges nothing on failure or timeout |
+| `pollDueVoiceJobs(now?)` → count | Polls every due `lipsync` job. Call it from the job poller in the cron tick |
+| `voiceTrackFromJob(workspaceId, jobId)` | Rebuilds a `VoiceTrack` from a finished `voice` job |
+
+`VoiceTrack` carries `jobId`, `assetId`, `url`, `mimeType`, `durationMs`, `costUsd`, and `mock`. `TalkingClip` adds `status` (`running` \| `succeeded` \| `failed`), the clip `assetId`, `url`, `mimeType`, `posterUrl`, and the `audio` track; when `mimeType` is not a video, play `audio` beside it. The editor can store `audio.assetId` on `scene_takes.voice_asset_id`, `jobId` on `lipsync_job_id`, and `assetId` on `lipsync_asset_id`. Costs are recorded on `generation_jobs.cost_usd` only; credit reservation belongs to the credits feature.
 
 ## How to add a feature
 

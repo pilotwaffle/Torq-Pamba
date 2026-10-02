@@ -45,7 +45,16 @@ describe("provider registry", () => {
       "gemini-3.8-flash",
       "grok-4.7",
     ]);
-    expect(registry.adapters.map((adapter) => adapter.id)).toEqual(["google", "heygen", "kling", "llm", "runway", "xai"]);
+    expect(registry.adapters.map((adapter) => adapter.id)).toEqual([
+      "elevenlabs",
+      "google",
+      "heygen",
+      "heygen-lipsync",
+      "kling",
+      "llm",
+      "runway",
+      "xai",
+    ]);
   });
 
   it("resolves by id and rejects unknown ids", () => {
