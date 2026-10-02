@@ -1,6 +1,6 @@
 # Contributing
 
-Torq-Pamba is a Phase 0 and Phase 1 studio: it makes videos, requires approval, and schedules them. It does not publish. Changes that add a posting path, a device farm, account trading, or a way to strip AI-provenance metadata will not be accepted.
+Torq-Pamba makes videos, requires approval, schedules them, and (from Phase 2) publishes them through official TikTok, Instagram and Facebook APIs to accounts the customer connected. Read [STANDARDS.md](STANDARDS.md) first. Changes that add a posting path outside `src/lib/publish/live/`, a device farm, account trading, or a way to strip AI-provenance metadata will not be accepted.
 
 ## Setup
 
@@ -55,7 +55,13 @@ Business rules live in `src/lib` so unit tests can call them without rendering a
 | `src/lib/pricing.ts` | `TIER_MODEL`, `FALLBACK_CHAIN`, and `estimateClipCost`, derived from the catalog |
 | `src/lib/providers/` | One adapter file per vendor, listed in `adapters.ts`, plus `mock.ts`, `live.ts`, `catalog.ts`, `registry.ts` |
 | `src/lib/approval.ts` | Gate rules. Approve is impossible until the draft is complete |
-| `src/lib/schedule.ts` | Slots and `processDueItems`. No publish function |
+| `src/lib/schedule.ts` | Slots and `processDueItems`. Hands targeted items to `src/lib/publish/queue.ts` |
+| `src/lib/publish/` | Accounts, OAuth, rules, mock publisher, queue, dispatch. Official endpoints live only in `live/` |
+| `src/lib/media/` | Clip storage and ffmpeg stitching |
+| `src/lib/analytics/` | Post metric snapshots |
+| `src/lib/reach/` | Hook tests, Knowledge tiles, ad hand-offs, creator briefs |
+| `src/lib/platform/` | API keys and OAuth grants, REST v1, MCP server, OAuth 2.1 authorization server |
+| `src/lib/tools/` | Pure logic for the free public tools |
 | `src/lib/billing.ts` | Plans and Stripe test mode |
 | `e2e/` | `support/` (steps, `account` fixture, journey), `core/` (journey, fallback, shell, capture), and one folder per feature |
 | `drizzle/` | Committed SQL migrations |
@@ -67,8 +73,15 @@ Pages and routes that read or write the database export `dynamic = "force-dynami
 
 A change has to keep these properties true. They are tested.
 
-1. **No publishing.** Nothing in `src/` requests TikTok Content Posting (`open.tiktokapis.com/v2/post/publish`), Instagram `media_publish`, or Facebook `video_reels`. Due schedule rows become `due_manual` and stay that way. Do not add a function whose job is to post.
-2. **AI disclosure on by default.** New videos start with `aiGenerated: true`. Turning the label off requires an explicit confirmation and an `audit_log` row. The workspace default works the same way.
+1. **Publishing: official APIs only, owner-approved, always labelled.** Torq-Pamba may publish to TikTok, Instagram and Facebook through official APIs only. Publish code lives only in src/lib/publish/live/. Barry must approve every post before it publishes. The AI-generated label is always on. No phone-farm, device or managed-account posting.
+
+   (Barry's rule, approved by name on 2026-10-02. It replaces the original "No publishing" criterion.) How the code enforces it, with the tests:
+   - Endpoints. TikTok Content Posting (`open.tiktokapis.com/v2/post/publish`), Instagram `media_publish` and Facebook `video_reels` appear only under `src/lib/publish/live/`. Only the dispatcher, account linking and analytics may import that folder. Both are tested in `src/lib/schedule.test.ts`.
+   - Owner approval. A post publishes only if its approval record names a workspace owner as `approvedBy`. A missing approval, an approval with no approver, or one from a non-owner never publishes. Tested in `src/lib/publish/publish-flow.test.ts` and `publish-rules.test.ts`.
+   - AI label. Every publish attempt has `ai_disclosure = true`. A database check (migration 0007) and the dispatcher both enforce it, and the TikTok `is_aigc` and Instagram `is_ai_generated` flags are hard-wired on. That holds for every video, whatever its own `aiGenerated` flag says.
+   - Platforms and devices. Only TikTok, Instagram and Facebook can be targeted or dispatched; any other platform fails closed. A source scan fails on device, emulator, Appium, ADB or private-API posting code, on consumer-site login automation, and on any such package. Tested in `src/lib/publish/compliance.test.ts`.
+   - Gates. A post also needs a connected OAuth account the customer owns and `PUBLISH_MODE=live`; otherwise the mock publisher runs. Due rows without targets still become `due_manual`. TikTok posts stay `SELF_ONLY`, with at most 5 creators per 24 hours, until `TIKTOK_AUDITED=1`.
+2. **AI disclosure on by default.** New videos start with `aiGenerated: true`. Turning the in-app label off requires an explicit confirmation and an `audit_log` row, and the workspace default works the same way. Neither reaches a platform: every publish carries the AI label (criterion 1).
 3. **No farm, warming, account market, or metadata stripping.** Do not add device or SIM control, account creation for a customer, warming, buying or selling accounts, re-creating a banned account, or a tool that removes AI-provenance metadata. The terms already forbid these.
 4. **Stripe test mode only.** `assertTestMode` must keep throwing when `STRIPE_SECRET_KEY` starts with `sk_live_`. Missing key means a simulated upgrade that the UI labels as simulated.
 5. **Mock unless live and keyed.** `isLive` is false unless `PROVIDER_MODE=live`, the vendor key is non-empty, and `NODE_ENV` is not `test`. New adapters use that guard. Tests do not call vendor hosts.
@@ -120,6 +133,8 @@ Before you open a change:
 
 Add or extend a Vitest file next to the module when you change pricing, the router, approval, scheduling, billing, auth, or onboarding. The forbidden-endpoint scan in `src/lib/schedule.test.ts` must stay, and it must still fail the suite if those strings appear under `src/`.
 
-Run `npm run test:e2e` when you change a page, a form, or a flow the journey covers (signup, onboarding, chat, approval, schedule). A new feature adds its own `e2e/<feature>/*.spec.ts` using `test` from `e2e/support`, rather than extending the core journey. If you change what a screenshot shows, regenerate with `npm run capture` and `bash scripts/make-media.sh`.
+Run `npm run test:e2e` when you change a page, a form, or a flow the e2e specs cover (signup, onboarding, chat, approval, schedule, publishing, reach, API keys, OAuth consent, free tools). A new feature adds its own `e2e/<feature>/*.spec.ts` using `test` from `e2e/support`, rather than extending the core journey. If you change what a screenshot shows, regenerate with `npm run capture` and `bash scripts/make-media.sh`.
+
+If you add a REST route or an MCP tool, put the logic in `src/lib/platform/operations.ts` so both surfaces share it, and extend `src/lib/platform/platform.test.ts`. Never store a raw key or token; store `hashSecret(...)`.
 
 If you add a migration, generate it with `npm run db:generate` and commit `./drizzle`. Do not hand-edit a snapshot to skip a column the schema declares.

@@ -107,8 +107,28 @@ export async function approveAndSchedule(page: Page, options: Pace = {}): Promis
 export async function expectQueued(page: Page, text: string, options: Pace = {}): Promise<void> {
   await page.goto("/app/schedule");
   await expect(page.getByRole("heading", { name: "Schedule", exact: true })).toBeVisible();
-  await expect(page.getByText(/Publishing arrives in Phase 2/)).toBeVisible();
+  await expect(page.getByText(/official TikTok, Instagram and Facebook APIs only/)).toBeVisible();
   const queued = page.getByRole("row").filter({ hasText: text });
   await expect(queued).toContainText("Scheduled");
-  await shot(page, options, "08-schedule-queue.png", page.getByText(/Publishing arrives in Phase 2/));
+  await shot(page, options, "08-schedule-queue.png", page.getByText(/official TikTok, Instagram and Facebook APIs only/));
+}
+
+/** Chat → generate → approve, from a signed-in dashboard. Returns on the approved video page. */
+export async function makeApprovedVideo(
+  page: Page,
+  options: { prompt?: string; privacy?: "Public" | "Friends" | "Only me" } = {},
+): Promise<void> {
+  await page.goto("/app/chat");
+  await page.getByLabel("Message").fill(options.prompt ?? VIDEO_PROMPT);
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("table", { name: "Cost preview" })).toBeVisible();
+  await page.getByRole("button", { name: /Generate \(est\. \$/ }).click();
+  await expect(page.getByRole("heading", { name: "Video ready" })).toBeVisible();
+  await page.getByRole("link", { name: "Review & approve" }).click();
+  await page.getByLabel("Creator nickname").fill("Northwind");
+  await page.getByLabel("Who can view this video").selectOption({ label: options.privacy ?? "Public" });
+  await page.getByRole("checkbox", { name: "I agree to TikTok's Music Usage Confirmation" }).check();
+  await page.getByRole("checkbox", { name: "I consent to schedule this video" }).check();
+  await page.getByRole("button", { name: "Approve" }).click();
+  await expect(page.getByRole("heading", { name: "Approved" })).toBeVisible();
 }

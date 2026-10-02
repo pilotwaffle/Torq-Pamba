@@ -65,6 +65,8 @@ export async function generateVideo(input: {
   /** The chat conversation that message goes to. */
   notifyConversationId?: string | null;
   waitMs?: number;
+  /** Set for REST/MCP calls: the credential whose monthly `max_credits` ceiling this charge counts against. */
+  apiGrant?: { grantId: string; maxCredits: number | null } | null;
 }): Promise<GenerateVideoResult> {
   const db = await getDb();
   const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, input.workspaceId)).limit(1);
@@ -98,6 +100,7 @@ export async function generateVideo(input: {
     model: TIER_MODEL[input.tier],
     units: durationS,
     costUsd: estimate.total,
+    apiGrant: input.apiGrant ?? null,
   });
   if (!hold.ok) return { ok: false, error: hold.error };
   const release = () => releaseCredits(hold.chargeId);

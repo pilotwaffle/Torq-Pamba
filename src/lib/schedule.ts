@@ -1,15 +1,18 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { and, asc, desc, eq, lte, ne } from "drizzle-orm";
 import { getDb } from "@/db";
-import { scheduleItems, videos, workspaces } from "@/db/schema";
+import { publishAttempts, scheduleItems, videos, workspaces, type PublishTarget } from "@/db/schema";
 import { writeAudit } from "@/lib/audit";
 import { allowsInsecureLocalEndpoints } from "@/lib/local-mode";
+import { AccountError, validateTargets } from "@/lib/publish/accounts";
+import { parseTargets } from "@/lib/publish/config";
+import { enqueuePublishJobs, processPublishQueue } from "@/lib/publish/queue";
 import { addCalendarDays, validZone, zonedParts, zonedToUtc } from "@/lib/time";
 
 export const SLOT_HOURS = [9, 12, 18] as const;
 
 export const SCHEDULE_BANNER =
-  "Publishing arrives in Phase 2 via official TikTok, Instagram and Facebook APIs after app review. Torq-Pamba never posts from devices. Items that come due are marked 'Ready to publish manually'.";
+  "Posting uses official TikTok, Instagram and Facebook APIs only, on accounts you connect. Torq-Pamba never posts from devices. Items without a connected account are marked 'Ready to publish manually' when they come due.";
 
 export class ScheduleError extends Error {
   constructor(message: string) {
@@ -69,6 +72,7 @@ export function scheduleStatusLabel(status: string): string {
   if (status === "due_manual") return "Ready to publish manually";
   if (status === "scheduled") return "Scheduled";
   if (status === "canceled") return "Canceled";
+  if (status === "publishing") return "Sent to publisher";
   return status;
 }
 
@@ -115,11 +119,23 @@ async function itemContext(scheduleItemId: string) {
   return row ?? null;
 }
 
-export async function scheduleVideo(videoId: string, when: Date | "next", actor = "user") {
+export async function scheduleVideo(
+  videoId: string,
+  when: Date | "next",
+  actor = "user",
+  requestedTargets: PublishTarget[] = [],
+) {
   const video = await videoContext(videoId);
   if (!video) throw new ScheduleError("Video not found");
   if (video.status !== "approved") {
     throw new ScheduleError("Only an approved video can be scheduled");
+  }
+  let targets: PublishTarget[];
+  try {
+    targets = await validateTargets(video.workspaceId, requestedTargets);
+  } catch (error) {
+    if (error instanceof AccountError) throw new ScheduleError(error.message);
+    throw error;
   }
 
   const db = await getDb();
@@ -138,6 +154,7 @@ export async function scheduleVideo(videoId: string, when: Date | "next", actor 
       videoId: video.id,
       scheduledAt,
       status: "scheduled",
+      targets,
     })
     .returning();
   if (!created) throw new ScheduleError("Could not schedule the video");
@@ -150,7 +167,12 @@ export async function scheduleVideo(videoId: string, when: Date | "next", actor 
     workspaceId: video.workspaceId,
     actor,
     action: "video.scheduled",
-    data: { videoId: video.id, scheduleItemId: created.id, scheduledAt: scheduledAt.toISOString() },
+    data: {
+      videoId: video.id,
+      scheduleItemId: created.id,
+      scheduledAt: scheduledAt.toISOString(),
+      targets: targets.map((target) => target.mode),
+    },
   });
 
   return {
@@ -160,6 +182,7 @@ export async function scheduleVideo(videoId: string, when: Date | "next", actor 
     scheduledAt,
     status: "scheduled" as const,
     title: video.title || "Untitled",
+    targets,
   };
 }
 
@@ -174,6 +197,7 @@ export async function reschedule(
     throw new ScheduleError("Schedule item not found");
   }
   if (item.status === "canceled") throw new ScheduleError("That item is canceled");
+  if (item.status === "publishing") throw new ScheduleError("That item was already sent to the publisher");
 
   const scheduledAt = resolveWhen(when, item.timezone, new Date());
   const db = await getDb();
@@ -206,6 +230,11 @@ export async function cancel(scheduleItemId: string, actor = "user", workspaceId
     .update(scheduleItems)
     .set({ status: "canceled", updatedAt: new Date() })
     .where(eq(scheduleItems.id, item.id));
+  // Jobs not yet picked up are canceled too. Anything already sent stays in the publish log.
+  await db
+    .update(publishAttempts)
+    .set({ status: "canceled", completedAt: new Date() })
+    .where(and(eq(publishAttempts.scheduleItemId, item.id), eq(publishAttempts.status, "pending")));
 
   const [other] = await db
     .select({ id: scheduleItems.id })
@@ -227,32 +256,52 @@ export async function cancel(scheduleItemId: string, actor = "user", workspaceId
   });
 }
 
-/** Move scheduled items whose slot has arrived to due_manual. Nothing is posted. */
-export async function processDueItems(now: Date): Promise<string[]> {
+/**
+ * Handle scheduled items whose slot has arrived. Items with no connected-account
+ * targets move to due_manual (nothing is posted). Items with targets move to
+ * "publishing" and get one publish job per target; processPublishQueue runs them.
+ */
+export async function processDueItems(now: Date, options: { workspaceId?: string } = {}): Promise<string[]> {
   const db = await getDb();
-  const due = await db
-    .select()
-    .from(scheduleItems)
-    .where(and(eq(scheduleItems.status, "scheduled"), lte(scheduleItems.scheduledAt, now)));
+  const filters = [eq(scheduleItems.status, "scheduled"), lte(scheduleItems.scheduledAt, now)];
+  if (options.workspaceId) filters.push(eq(scheduleItems.workspaceId, options.workspaceId));
+  const due = await db.select().from(scheduleItems).where(and(...filters));
 
   const moved: string[] = [];
   for (const item of due) {
+    const targets = parseTargets(item.targets);
+    const next = targets.length > 0 ? "publishing" : "due_manual";
     const [updated] = await db
       .update(scheduleItems)
-      .set({ status: "due_manual", updatedAt: new Date() })
+      .set({ status: next, updatedAt: new Date() })
       .where(and(eq(scheduleItems.id, item.id), eq(scheduleItems.status, "scheduled")))
       .returning({ id: scheduleItems.id });
     if (!updated) continue;
-    await writeAudit({
-      workspaceId: item.workspaceId,
-      actor: "system",
-      action: "schedule.due_manual",
-      data: {
-        scheduleItemId: item.id,
+    if (next === "publishing") {
+      const jobIds = await enqueuePublishJobs({
+        workspaceId: item.workspaceId,
         videoId: item.videoId,
-        scheduledAt: item.scheduledAt.toISOString(),
-      },
-    });
+        scheduleItemId: item.id,
+        targets,
+      });
+      await writeAudit({
+        workspaceId: item.workspaceId,
+        actor: "system",
+        action: "schedule.publishing",
+        data: { scheduleItemId: item.id, videoId: item.videoId, jobIds },
+      });
+    } else {
+      await writeAudit({
+        workspaceId: item.workspaceId,
+        actor: "system",
+        action: "schedule.due_manual",
+        data: {
+          scheduleItemId: item.id,
+          videoId: item.videoId,
+          scheduledAt: item.scheduledAt.toISOString(),
+        },
+      });
+    }
     moved.push(item.id);
   }
   return moved;
@@ -278,7 +327,8 @@ export async function handleCronTick(authorization: string | null, now = new Dat
     return { status: 401, body: { error: "Unauthorized" } };
   }
   const due = await processDueItems(now);
-  return { status: 200, body: { ok: true, due: due.length } };
+  const jobs = await processPublishQueue();
+  return { status: 200, body: { ok: true, due: due.length, jobsSucceeded: jobs.succeeded, jobsFailed: jobs.failed } };
 }
 
 export async function scheduleApprovedVideo(input: {
@@ -312,6 +362,7 @@ export async function listSchedule(workspaceId: string) {
       id: scheduleItems.id,
       status: scheduleItems.status,
       scheduledAt: scheduleItems.scheduledAt,
+      targets: scheduleItems.targets,
       title: videos.title,
       videoId: videos.id,
     })

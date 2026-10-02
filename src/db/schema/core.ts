@@ -37,6 +37,13 @@ export type BrandBrief = {
   websiteUrl?: string;
 };
 
+/** One official-API destination chosen when a video is scheduled. */
+export type PublishTarget = {
+  accountId: string;
+  /** tiktok: direct | draft. instagram: reel | trial_reel. facebook: reel. */
+  mode: string;
+};
+
 export type AvatarScene = {
   name?: string;
   startFrame?: string;
@@ -256,6 +263,7 @@ export const scheduleItems = pgTable(
       .references(() => videos.id, { onDelete: "cascade" }),
     scheduledAt: timestamp("scheduled_at", { withTimezone: true }).notNull(),
     status: scheduleStatus("status").notNull().default("scheduled"),
+    targets: jsonb("targets").$type<PublishTarget[]>().notNull().default([]),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

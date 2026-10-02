@@ -57,7 +57,7 @@ export default async function ChatPage({
     <main className="max-w-4xl">
       <PageHeader
         title="Chat"
-        description="Ask the agent to write a script, price it, generate, approve, and schedule. Anything that spends waits for your confirmation. Torq-Pamba does not publish it."
+        description="Ask the agent to write a script, price it, generate, approve, and schedule. Anything that spends waits for your confirmation. Nothing is published until you approve it."
       />
       <nav aria-label="Conversations" className="mb-6 flex flex-wrap items-center gap-2">
         {threads.map((thread) => (

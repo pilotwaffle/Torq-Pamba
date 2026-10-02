@@ -1,0 +1,398 @@
+import { readFile } from "node:fs/promises";
+import { eq } from "drizzle-orm";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { POST as cronTick } from "@/app/api/cron/tick/route";
+import { getDb } from "@/db";
+import { auditLog, members, publishAttempts, publishEvents, publishingConnections, scheduleItems, videoRenders, videos } from "@/db/schema";
+import { EMPTY_APPROVAL } from "@/lib/approval";
+import { storeMedia } from "@/lib/media/assets";
+import { MOCK_CLIP_FIXTURE } from "@/lib/media/mock-clip";
+import { verifyPull } from "@/lib/media/pull";
+import { approveVideo } from "@/lib/videos";
+import { refreshMetrics, workspaceAnalytics } from "@/lib/analytics";
+import { signupAccount } from "@/lib/auth/account";
+import { cancel, processDueItems, reschedule, scheduleVideo } from "@/lib/schedule";
+import { accessTokenOf, connectMockAccount, disconnectAccount, listAccounts, MOCK_TOKEN_MARKER, REVOKED_TOKEN_MARKER } from "./accounts";
+import { approvedMediaUrl, runPublishJob } from "./dispatch";
+import { tiktokPublisher, TIKTOK_ENDPOINTS } from "./live/tiktok";
+import { processPublishQueue } from "./queue";
+import type { PublishContext } from "./types";
+
+const password = "correct-horse-battery";
+const email = (label: string) => `${label}-${Date.now()}-${Math.random().toString(16).slice(2)}@example.com`;
+
+const manifest = {
+  aiGenerated: true,
+  hook: "Cold brew, zero wait",
+  totalDurationS: 30,
+  scenes: [],
+  captions: [{ text: "Grab one on the way", startS: 0, endS: 30 }],
+};
+
+function approvalFor(privacy: string, approvedBy?: string) {
+  return {
+    creatorNickname: "Northwind",
+    privacy,
+    allowComments: false,
+    allowDuet: false,
+    allowStitch: false,
+    commercialDisclosure: false,
+    commercialType: "",
+    aiGenerated: true,
+    musicConsent: true,
+    scheduleConsent: true,
+    ...(approvedBy ? { approvedBy } : {}),
+  };
+}
+
+async function setup(label: string, privacy = "public", title = "Oat-milk cold brew") {
+  const { workspace, user } = await signupAccount({ email: email(label), password, workspaceName: `${label} Co` });
+  const db = await getDb();
+  const [video] = await db
+    .insert(videos)
+    .values({ workspaceId: workspace.id, title, status: "approved", aiGenerated: true, manifest, approval: approvalFor(privacy, user.id) })
+    .returning();
+  return { workspace, user, video: video!, db };
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
+
+describe("publish flow (mock platforms)", () => {
+  it("due items with targets become publish jobs; TikTok posts private until audit, Instagram posts a Reel", async () => {
+    const { workspace, user, video, db } = await setup("flow");
+    const tiktok = await connectMockAccount({ workspaceId: workspace.id, platform: "tiktok", userId: user.id });
+    const instagram = await connectMockAccount({ workspaceId: workspace.id, platform: "instagram", userId: user.id });
+    expect(tiktok.accessTokenCiphertext).toBe(MOCK_TOKEN_MARKER);
+    expect(tiktok).toMatchObject({ mode: "mock", status: "active", tokenKeyVersion: 1, scopes: ["mock"] });
+    expect(accessTokenOf(tiktok)).toBe("");
+
+    const item = await scheduleVideo(video.id, new Date(Date.now() - 1_000), user.id, [
+      { accountId: tiktok.id, mode: "direct" },
+      { accountId: instagram.id, mode: "reel" },
+    ]);
+    expect(item.targets).toHaveLength(2);
+    expect(await processDueItems(new Date(), { workspaceId: workspace.id })).toContain(item.id);
+    const [row] = await db.select().from(scheduleItems).where(eq(scheduleItems.id, item.id));
+    expect(row?.status).toBe("publishing");
+
+    const result = await processPublishQueue({ workspaceId: workspace.id });
+    expect(result).toEqual({ succeeded: 2, failed: 0 });
+    const jobs = await db.select().from(publishAttempts).where(eq(publishAttempts.videoId, video.id));
+    const tiktokJob = jobs.find((job) => job.platform === "tiktok");
+    const igJob = jobs.find((job) => job.platform === "instagram");
+    expect(tiktokJob).toMatchObject({ status: "published", privacy: "SELF_ONLY", mode: "direct", aiDisclosure: true, connectionId: tiktok.id });
+    expect(tiktokJob?.externalPostId).toMatch(/^mock_tiktok_/);
+    expect(tiktokJob?.submittedAt).toBeInstanceOf(Date);
+    expect(tiktokJob?.completedAt).toBeInstanceOf(Date);
+    expect(igJob).toMatchObject({ status: "published", privacy: "PUBLIC", mode: "reel", aiDisclosure: true });
+
+    const events = await db.select().from(publishEvents).where(eq(publishEvents.jobId, tiktokJob!.id));
+    expect(events.map((event) => event.status)).toEqual(["processing", "forced_private", "submitted", "succeeded"]);
+    const audits = await db.select().from(auditLog).where(eq(auditLog.workspaceId, workspace.id));
+    expect(audits.filter((entry) => entry.action === "publish.succeeded")).toHaveLength(2);
+    expect(audits.some((entry) => entry.action === "schedule.publishing")).toBe(true);
+    await expect(reschedule(item.id, "next", user.id)).rejects.toThrow(/already sent/);
+  });
+
+  it("re-checks the approval at post time and refuses Meta posts for a narrower-than-public approval", async () => {
+    const { workspace, user, video, db } = await setup("narrow", "only_me");
+    const instagram = await connectMockAccount({ workspaceId: workspace.id, platform: "instagram", userId: user.id });
+    const tiktok = await connectMockAccount({ workspaceId: workspace.id, platform: "tiktok", userId: user.id });
+    await scheduleVideo(video.id, new Date(Date.now() - 1_000), user.id, [
+      { accountId: instagram.id, mode: "reel" },
+      { accountId: tiktok.id, mode: "direct" },
+    ]);
+    await processDueItems(new Date(), { workspaceId: workspace.id });
+    const queued = await db.select().from(publishAttempts).where(eq(publishAttempts.videoId, video.id));
+    const igJob = queued.find((job) => job.platform === "instagram")!;
+    const ttJob = queued.find((job) => job.platform === "tiktok")!;
+    const ig = await runPublishJob(igJob.id);
+    expect(ig.status).toBe("failed");
+    expect(ig.error).toMatch(/Instagram Reels are public/);
+    // Someone strips consent after scheduling: the TikTok job must refuse too.
+    await db
+      .update(videos)
+      .set({ approval: { ...approvalFor("only_me", user.id), musicConsent: false } })
+      .where(eq(videos.id, video.id));
+    const tt = await runPublishJob(ttJob.id);
+    expect(tt.error).toMatch(/Music usage/);
+    expect(await processPublishQueue({ workspaceId: workspace.id })).toEqual({ succeeded: 0, failed: 0 });
+    const audits = await db.select().from(auditLog).where(eq(auditLog.workspaceId, workspace.id));
+    expect(audits.filter((entry) => entry.action === "publish.failed")).toHaveLength(2);
+  });
+
+  it("a live account never posts while PUBLISH_MODE is not live, and makes no network call", async () => {
+    const { workspace, user, video, db } = await setup("liveguard");
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const mock = await connectMockAccount({ workspaceId: workspace.id, platform: "tiktok", userId: user.id });
+    await db.update(publishingConnections).set({ mode: "live" }).where(eq(publishingConnections.id, mock.id));
+    await scheduleVideo(video.id, new Date(Date.now() - 1_000), user.id, [{ accountId: mock.id, mode: "direct" }]);
+    await processDueItems(new Date(), { workspaceId: workspace.id });
+    const [job] = await db.select().from(publishAttempts).where(eq(publishAttempts.videoId, video.id));
+    const result = await runPublishJob(job!.id);
+    expect(result.status).toBe("failed");
+    expect(result.error).toMatch(/PUBLISH_MODE is not live/);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("validates targets, cancels queued jobs with the slot, and fails jobs for disconnected accounts", async () => {
+    const { workspace, user, video, db } = await setup("targets");
+    const other = await setup("other-ws");
+    const foreign = await connectMockAccount({ workspaceId: other.workspace.id, platform: "tiktok" });
+    const tiktok = await connectMockAccount({ workspaceId: workspace.id, platform: "tiktok", userId: user.id });
+    await expect(scheduleVideo(video.id, "next", user.id, [{ accountId: foreign.id, mode: "direct" }])).rejects.toThrow(/connected account/);
+    await expect(scheduleVideo(video.id, "next", user.id, [{ accountId: tiktok.id, mode: "trial_reel" }])).rejects.toThrow(/does not support/);
+
+    const item = await scheduleVideo(video.id, new Date(Date.now() - 1_000), user.id, [{ accountId: tiktok.id, mode: "draft" }]);
+    await processDueItems(new Date(), { workspaceId: workspace.id });
+    await cancel(item.id, user.id);
+    const [canceledJob] = await db.select().from(publishAttempts).where(eq(publishAttempts.scheduleItemId, item.id));
+    expect(canceledJob?.status).toBe("canceled");
+
+    const second = await setup("disconnect");
+    const acct = await connectMockAccount({ workspaceId: second.workspace.id, platform: "facebook" });
+    await scheduleVideo(second.video.id, new Date(Date.now() - 1_000), "u", [{ accountId: acct.id, mode: "reel" }]);
+    await processDueItems(new Date(), { workspaceId: second.workspace.id });
+    await disconnectAccount(second.workspace.id, acct.id);
+    expect(await listAccounts(second.workspace.id)).toHaveLength(0);
+    const [revoked] = await db.select().from(publishingConnections).where(eq(publishingConnections.id, acct.id));
+    expect(revoked!.accessTokenCiphertext).toBe(REVOKED_TOKEN_MARKER);
+    expect(revoked!.refreshTokenCiphertext).toBeNull();
+    expect(revoked!.status).toBe("revoked");
+    expect(() => accessTokenOf(revoked!)).toThrow(/disconnected/);
+    expect(await processPublishQueue({ workspaceId: second.workspace.id })).toEqual({ succeeded: 0, failed: 1 });
+    const [job] = await db.select().from(publishAttempts).where(eq(publishAttempts.connectionId, acct.id));
+    expect(job?.error).toMatch(/disconnected/);
+  });
+
+  it("always sets ai_disclosure, for every video, sends it as the AI label, and the database refuses to turn it off", async () => {
+    const { workspace, user, video, db } = await setup("aidisclosure");
+    const tiktok = await connectMockAccount({ workspaceId: workspace.id, platform: "tiktok", userId: user.id });
+    const instagram = await connectMockAccount({ workspaceId: workspace.id, platform: "instagram", userId: user.id });
+    await scheduleVideo(video.id, new Date(Date.now() - 1_000), user.id, [
+      { accountId: tiktok.id, mode: "direct" },
+      { accountId: instagram.id, mode: "reel" },
+    ]);
+    await processDueItems(new Date(), { workspaceId: workspace.id });
+    const queued = await db.select().from(publishAttempts).where(eq(publishAttempts.videoId, video.id));
+    expect(queued.map((job) => job.aiDisclosure)).toEqual([true, true]);
+    const ttJob = queued.find((job) => job.platform === "tiktok")!;
+    const igJob = queued.find((job) => job.platform === "instagram")!;
+
+    expect((await runPublishJob(ttJob.id)).status).toBe("succeeded");
+    const ttEvents = await db.select().from(publishEvents).where(eq(publishEvents.jobId, ttJob.id));
+    expect(ttEvents.find((event) => event.status === "submitted")?.detail).toMatchObject({ is_aigc: true });
+
+    // No opt-out: clearing the flag on an attempt is rejected by the database check (migration 0007).
+    await expect(db.update(publishAttempts).set({ aiDisclosure: false }).where(eq(publishAttempts.id, igJob.id))).rejects.toThrow();
+    await expect(
+      db.insert(publishAttempts).values({ workspaceId: workspace.id, videoId: video.id, connectionId: instagram.id, platform: "instagram", mode: "reel", aiDisclosure: false }),
+    ).rejects.toThrow();
+    const [stillOn] = await db.select().from(publishAttempts).where(eq(publishAttempts.id, igJob.id));
+    expect(stillOn?.aiDisclosure).toBe(true);
+    expect((await runPublishJob(igJob.id)).status).toBe("succeeded");
+    const igEvents = await db.select().from(publishEvents).where(eq(publishEvents.jobId, igJob.id));
+    expect(igEvents.find((event) => event.status === "submitted")?.detail).toMatchObject({ is_ai_generated: true });
+
+    // Even a video whose row says it is not AI-generated is queued and posted with the label.
+    const plain = await setup("aidisclosure-off");
+    await db.update(videos).set({ aiGenerated: false }).where(eq(videos.id, plain.video.id));
+    const fb = await connectMockAccount({ workspaceId: plain.workspace.id, platform: "facebook", userId: plain.user.id });
+    await scheduleVideo(plain.video.id, new Date(Date.now() - 1_000), plain.user.id, [{ accountId: fb.id, mode: "reel" }]);
+    await processDueItems(new Date(), { workspaceId: plain.workspace.id });
+    const [fbJob] = await db.select().from(publishAttempts).where(eq(publishAttempts.videoId, plain.video.id));
+    expect(fbJob?.aiDisclosure).toBe(true);
+    expect((await runPublishJob(fbJob!.id)).status).toBe("succeeded");
+    const fbEvents = await db.select().from(publishEvents).where(eq(publishEvents.jobId, fbJob!.id));
+    expect(fbEvents.find((event) => event.status === "submitted")?.detail).toMatchObject({ is_ai_generated: true });
+  });
+
+  it("never publishes without an approval from the workspace owner on record", async () => {
+    const { workspace, user, video, db } = await setup("owner-approval");
+    const instagram = await connectMockAccount({ workspaceId: workspace.id, platform: "instagram", userId: user.id });
+    const enqueue = async () => {
+      await db.delete(publishAttempts).where(eq(publishAttempts.videoId, video.id));
+      const [job] = await db
+        .insert(publishAttempts)
+        .values({ workspaceId: workspace.id, videoId: video.id, connectionId: instagram.id, platform: "instagram", mode: "reel" })
+        .returning();
+      return job!;
+    };
+    const attempt = async (approval: Record<string, unknown> | null) => {
+      await db.update(videos).set({ approval }).where(eq(videos.id, video.id));
+      const job = await enqueue();
+      const result = await runPublishJob(job.id);
+      const events = await db.select().from(publishEvents).where(eq(publishEvents.jobId, job.id));
+      return { result, statuses: events.map((event) => event.status) };
+    };
+
+    // No approval at all.
+    const none = await attempt(null);
+    expect(none.result.status).toBe("failed");
+    expect(none.result.error).toMatch(/no approval from the workspace owner/);
+    expect(none.statuses).toEqual(["processing", "failed"]);
+
+    // Consent given, but no approver recorded.
+    const { approvedBy: _drop, ...anonymous } = approvalFor("public", user.id);
+    void _drop;
+    const unattributed = await attempt(anonymous);
+    expect(unattributed.result.error).toMatch(/no approval from the workspace owner/);
+    expect(unattributed.statuses).toEqual(["processing", "failed"]);
+
+    // Approved by a workspace member who is not the owner.
+    const other = await signupAccount({ email: email("owner-approval-member"), password, workspaceName: "Other Co" });
+    await db.insert(members).values({ workspaceId: workspace.id, userId: other.user.id, role: "member" });
+    const byMember = await attempt(approvalFor("public", other.user.id));
+    expect(byMember.result.error).toMatch(/Only the workspace owner/);
+    expect(byMember.statuses).toEqual(["processing", "failed"]);
+
+    // Approved by someone outside the workspace (the owner of a different one).
+    const outsider = await signupAccount({ email: email("owner-approval-outsider"), password, workspaceName: "Outside Co" });
+    const byOutsider = await attempt(approvalFor("public", outsider.user.id));
+    expect(byOutsider.result.error).toMatch(/Only the workspace owner/);
+    expect(byOutsider.statuses).toEqual(["processing", "failed"]);
+
+    // The owner's approval publishes.
+    const byOwner = await attempt(approvalFor("public", user.id));
+    expect(byOwner.result.status).toBe("succeeded");
+    expect(byOwner.statuses).toContain("submitted");
+  });
+
+  it("approval records the render the owner saw, and publishing sends a signed pull URL for exactly that render", async () => {
+    vi.stubEnv("PUBLIC_BASE_URL", "https://studio.example.com");
+    const { workspace, user, db } = await setup("approved-render");
+    const bytes = await readFile(MOCK_CLIP_FIXTURE);
+    const renderOf = async (videoId: string) => {
+      const asset = await storeMedia({ workspaceId: workspace.id, kind: "video", source: "render", bytes, mimeType: "video/mp4" });
+      const [render] = await db.insert(videoRenders).values({ videoId, status: "ready", outputAssetId: asset.id }).returning();
+      return { asset, render: render! };
+    };
+    const [ready] = await db
+      .insert(videos)
+      .values({ workspaceId: workspace.id, title: "Rendered", status: "ready", aiGenerated: true, manifest })
+      .returning();
+    const first = await renderOf(ready!.id);
+    await db.update(videos).set({ currentRenderId: first.render.id }).where(eq(videos.id, ready!.id));
+    await approveVideo({
+      workspace,
+      actor: user.id,
+      videoId: ready!.id,
+      draft: { ...EMPTY_APPROVAL, creatorNickname: "Northwind", privacy: "public", aiGenerated: true, musicConsent: true, scheduleConsent: true },
+    });
+    const [approved] = await db.select().from(videos).where(eq(videos.id, ready!.id));
+    expect(approved?.approval).toMatchObject({ approvedBy: user.id, approvedRenderId: first.render.id });
+
+    // The editor re-renders after approval: the post still uses the approved render.
+    const second = await renderOf(ready!.id);
+    await db.update(videos).set({ currentRenderId: second.render.id }).where(eq(videos.id, ready!.id));
+
+    const instagram = await connectMockAccount({ workspaceId: workspace.id, platform: "instagram", userId: user.id });
+    const seen: (string | null)[] = [];
+    const capture = {
+      async publish(ctx: PublishContext) {
+        seen.push(ctx.video.mediaUrl);
+        return { externalId: "ig-1", mode: ctx.mode, privacy: "PUBLIC" };
+      },
+      async metrics() {
+        return {};
+      },
+    };
+    const [job] = await db
+      .insert(publishAttempts)
+      .values({ workspaceId: workspace.id, videoId: ready!.id, connectionId: instagram.id, platform: "instagram", mode: "reel" })
+      .returning();
+    expect((await runPublishJob(job!.id, { publishers: { instagram: capture } })).status).toBe("succeeded");
+    const url = new URL(seen[0]!);
+    expect(url.origin + url.pathname).toBe(`https://studio.example.com/api/media/${first.asset.id}/pull`);
+    expect(verifyPull(first.asset.id, url.searchParams.get("exp"), url.searchParams.get("sig"))).toBe(true);
+
+    // With no approved render on record there is no MP4 URL, so live publishers cannot start.
+    expect(await approvedMediaUrl(ready!.id, { approvedRenderId: null })).toBeNull();
+    expect(await approvedMediaUrl(ready!.id, { approvedRenderId: second.render.id })).not.toBeNull();
+    // A render of another video is never sent.
+    const [other] = await db.insert(videos).values({ workspaceId: workspace.id, title: "Other", status: "ready" }).returning();
+    const foreign = await renderOf(other!.id);
+    expect(await approvedMediaUrl(ready!.id, { approvedRenderId: foreign.render.id })).toBeNull();
+    // And not without an https PUBLIC_BASE_URL.
+    vi.stubEnv("PUBLIC_BASE_URL", "http://localhost:3000");
+    expect(await approvedMediaUrl(ready!.id, { approvedRenderId: first.render.id })).toBeNull();
+  });
+
+  it("cron tick needs CRON_SECRET, then runs due items and the publish queue", async () => {
+    const previous = process.env.CRON_SECRET;
+    process.env.CRON_SECRET = "tick-secret";
+    try {
+      const { workspace, user, video } = await setup("crontick");
+      const fb = await connectMockAccount({ workspaceId: workspace.id, platform: "facebook", userId: user.id });
+      await scheduleVideo(video.id, new Date(Date.now() - 1_000), user.id, [{ accountId: fb.id, mode: "reel" }]);
+      const response = await cronTick(
+        new Request("http://localhost/api/cron/tick", { method: "POST", headers: { authorization: "Bearer tick-secret" } }),
+      );
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { due: number; jobsSucceeded: number };
+      expect(body.due).toBeGreaterThanOrEqual(1);
+      expect(body.jobsSucceeded).toBeGreaterThanOrEqual(1);
+    } finally {
+      if (previous === undefined) delete process.env.CRON_SECRET;
+      else process.env.CRON_SECRET = previous;
+    }
+  });
+});
+
+describe("analytics", () => {
+  it("stores metric snapshots for posted jobs, skips drafts, and reports totals and engagement", async () => {
+    const { workspace, user, video, db } = await setup("analytics");
+    const tiktok = await connectMockAccount({ workspaceId: workspace.id, platform: "tiktok", userId: user.id });
+    const instagram = await connectMockAccount({ workspaceId: workspace.id, platform: "instagram", userId: user.id });
+    const draftVideo = (await setup("analytics-draft")).video;
+    // Moved into this workspace, so its owner re-approves it (publishing needs this workspace's owner).
+    await db.update(videos).set({ workspaceId: workspace.id, approval: approvalFor("public", user.id) }).where(eq(videos.id, draftVideo.id));
+    await scheduleVideo(video.id, new Date(Date.now() - 1_000), user.id, [
+      { accountId: tiktok.id, mode: "direct" },
+      { accountId: instagram.id, mode: "reel" },
+    ]);
+    await scheduleVideo(draftVideo.id, new Date(Date.now() - 1_000), user.id, [{ accountId: tiktok.id, mode: "draft" }]);
+    await processDueItems(new Date(), { workspaceId: workspace.id });
+    await processPublishQueue({ workspaceId: workspace.id });
+
+    const refreshed = await refreshMetrics(workspace.id);
+    expect(refreshed).toEqual({ snapshots: 2, skipped: 1 });
+    const report = await workspaceAnalytics(workspace.id);
+    expect(report.posts).toHaveLength(2);
+    expect(report.totals.views).toBe(report.posts.reduce((sum, post) => sum + post.views, 0));
+    expect(report.totals.views).toBeGreaterThan(0);
+    const ig = report.posts.find((post) => post.platform === "instagram");
+    expect(ig?.reach).toBeGreaterThan(0);
+    expect(report.engagementRate).toBeGreaterThan(0);
+    await refreshMetrics(workspace.id);
+    expect((await workspaceAnalytics(workspace.id)).posts).toHaveLength(2);
+  });
+
+  it("reads TikTok counts through the video query endpoint for live accounts", async () => {
+    const { workspace, user, video, db } = await setup("tt-metrics");
+    const acct = await connectMockAccount({ workspaceId: workspace.id, platform: "tiktok", userId: user.id });
+    await scheduleVideo(video.id, new Date(Date.now() - 1_000), user.id, [{ accountId: acct.id, mode: "direct" }]);
+    await processDueItems(new Date(), { workspaceId: workspace.id });
+    await processPublishQueue({ workspaceId: workspace.id });
+    const [job] = await db.select().from(publishAttempts).where(eq(publishAttempts.connectionId, acct.id));
+    const seen: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        expect(url).toBe(TIKTOK_ENDPOINTS.videoQuery);
+        seen.push(JSON.parse(String(init?.body)));
+        return new Response(
+          JSON.stringify({ data: { videos: [{ id: job!.externalPostId, view_count: 1200, like_count: 90, comment_count: 4, share_count: 6 }] }, error: { code: "ok" } }),
+        );
+      }),
+    );
+    expect(await refreshMetrics(workspace.id, { publishers: { tiktok: tiktokPublisher } })).toEqual({ snapshots: 1, skipped: 0 });
+    expect(seen[0]).toEqual({ filters: { video_ids: [job!.externalPostId] } });
+    const report = await workspaceAnalytics(workspace.id);
+    expect(report.posts[0]).toMatchObject({ views: 1200, likes: 90, comments: 4, shares: 6, engagementRate: 8.33 });
+  });
+});

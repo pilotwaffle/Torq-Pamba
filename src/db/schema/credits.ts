@@ -107,6 +107,12 @@ export const creditCharges = pgTable(
     jobId: uuid("job_id").references(() => generationJobs.id, { onDelete: "set null" }),
     takeId: uuid("take_id").references(() => sceneTakes.id, { onDelete: "set null" }),
     toolCallId: uuid("tool_call_id").references(() => chatToolCalls.id, { onDelete: "set null" }),
+    /**
+     * Added in 0009. The API key or OAuth grant (`api_keys.id` of the grant) that
+     * started this charge, so `api_keys.max_credits` caps ledger credits. Null for
+     * charges started in the app.
+     */
+    apiGrantId: uuid("api_grant_id"),
     model: text("model"),
     /** Seconds, images, or 1K characters, depending on `kind`. */
     units: numeric("units", { precision: 14, scale: 3, mode: "number" }).notNull().default(0),
@@ -120,6 +126,7 @@ export const creditCharges = pgTable(
     index("credit_charges_workspace_idx").on(table.workspaceId, table.createdAt),
     index("credit_charges_video_idx").on(table.videoId),
     index("credit_charges_job_idx").on(table.jobId),
+    index("credit_charges_api_grant_idx").on(table.apiGrantId, table.createdAt),
     check("credit_charges_credits_check", sql`${table.credits} >= 0`),
   ],
 );

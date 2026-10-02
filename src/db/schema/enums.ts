@@ -96,5 +96,17 @@ export const chargeKind = pgEnum("charge_kind", [
 
 export const connectionStatus = pgEnum("connection_status", ["active", "expired", "revoked", "error"]);
 export const publishStatus = pgEnum("publish_status", ["pending", "submitted", "published", "failed", "canceled"]);
-export const knowledgeKind = pgEnum("knowledge_kind", ["brand_fact", "preference", "learning", "hook_result", "rule"]);
+/** `angle` and `format` were appended in 0005 for the phase 3 Knowledge page. */
+export const knowledgeKind = pgEnum("knowledge_kind", ["brand_fact", "preference", "learning", "hook_result", "rule", "angle", "format"]);
 export const knowledgeSource = pgEnum("knowledge_source", ["user", "agent", "analytics"]);
+
+// Phase 3 reach engine (ported from feat/phase2-plus). Knowledge uses the
+// foundation's `knowledge_kind` (0005 appended `angle` and `format`).
+export const experimentStatus = pgEnum("experiment_status", ["draft", "running", "decided", "canceled"]);
+export const adHandoffKind = pgEnum("ad_handoff_kind", ["tiktok_spark", "meta_partnership"]);
+export const adHandoffStatus = pgEnum("ad_handoff_status", ["awaiting_creator", "ready", "revoked"]);
+
+// Phase 4 platform (ported from feat/phase2-plus). `api_keys.kind` (0005) uses
+// apiCredentialKind; `oauth_codes.scope` uses apiScope.
+export const apiCredentialKind = pgEnum("api_credential_kind", ["key", "oauth_access", "oauth_refresh"]);
+export const apiScope = pgEnum("api_scope", ["read", "write"]);

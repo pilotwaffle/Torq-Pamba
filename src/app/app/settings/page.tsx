@@ -20,6 +20,11 @@ export default async function SettingsPage({
   return (
     <main className="max-w-xl">
       <PageHeader title="Settings" description="Workspace name, timezone, monthly budget, and who can join." />
+      <p className="mb-4 text-sm">
+        <Link href="/app/settings/api" className="text-emerald-800 underline">
+          API keys and MCP
+        </Link>
+      </p>
       {params.error ? (
         <p className="mt-4 text-sm text-red-700" role="alert">
           {params.error}

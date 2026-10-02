@@ -10,13 +10,15 @@ export * from "./research";
 export * from "./credits";
 export * from "./publishing";
 export * from "./platform";
+export * from "./reach";
 
-import type { apiKeys, knowledgeItems } from "./platform";
+import type { apiKeys, knowledgeItems, oauthClients } from "./platform";
 import type { chatToolCalls, conversations } from "./chat";
 import type { creditCharges, creditLedger, creditTopUps, plans } from "./credits";
 import type { sceneTakes, videoCaptions, videoHooks, videoScenes } from "./editor";
 import type { generationJobs, mediaAssets, videoRenders } from "./media";
-import type { postAnalyticsSnapshots, publishAttempts, publishingConnections } from "./publishing";
+import type { postAnalyticsSnapshots, publishAttempts, publishEvents, publishingConnections } from "./publishing";
+import type { adHandoffs, creatorBriefs, hookExperiments, hookVariants } from "./reach";
 import type { ideas, inspirationAccounts, trends, viralPosts } from "./research";
 import type { voiceClones, voices } from "./voices";
 
@@ -44,3 +46,9 @@ export type PublishAttempt = typeof publishAttempts.$inferSelect;
 export type PostAnalyticsSnapshot = typeof postAnalyticsSnapshots.$inferSelect;
 export type KnowledgeItem = typeof knowledgeItems.$inferSelect;
 export type ApiKey = typeof apiKeys.$inferSelect;
+export type PublishEvent = typeof publishEvents.$inferSelect;
+export type HookExperiment = typeof hookExperiments.$inferSelect;
+export type HookVariant = typeof hookVariants.$inferSelect;
+export type AdHandoff = typeof adHandoffs.$inferSelect;
+export type CreatorBrief = typeof creatorBriefs.$inferSelect;
+export type OAuthClient = typeof oauthClients.$inferSelect;

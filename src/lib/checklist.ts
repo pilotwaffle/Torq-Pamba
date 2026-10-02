@@ -12,6 +12,7 @@ export function zeroToFirstPost(input: {
   avatarCount: number;
   videoCount: number;
   hasApproval: boolean;
+  connectedAccounts?: number;
 }): ChecklistItem[] {
   const briefDone = Boolean(input.brief?.companyName?.trim() && input.brief?.niche?.trim());
   return [
@@ -32,8 +33,8 @@ export function zeroToFirstPost(input: {
     {
       id: "connect",
       label: "Connect accounts — Phase 2",
-      done: false,
-      href: "/app/onboarding",
+      done: (input.connectedAccounts ?? 0) > 0,
+      href: "/app/accounts",
     },
   ];
 }

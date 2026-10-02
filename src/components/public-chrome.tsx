@@ -1,3 +1,4 @@
+import type React from "react";
 import Link from "next/link";
 
 const link = "text-zinc-800 underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700";
@@ -14,6 +15,12 @@ export function PublicHeader() {
           Torq-Pamba
         </Link>
         <nav aria-label="Site" className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+          <Link href="/tools" className={link}>
+            Free tools
+          </Link>
+          <Link href="/done-with-you" className={link}>
+            Done with you
+          </Link>
           <Link href="/terms" className={link}>
             Terms
           </Link>
@@ -42,7 +49,20 @@ export function PublicFooter() {
         <Link href="/privacy" className={link}>
           Privacy Policy
         </Link>
+        <Link href="/docs/api" className={link}>
+          API and MCP
+        </Link>
       </div>
     </footer>
+  );
+}
+
+export function PublicPage({ children, wide = false }: { children: React.ReactNode; wide?: boolean }) {
+  return (
+    <div className="flex min-h-screen flex-col">
+      <PublicHeader />
+      <main className={`mx-auto w-full ${wide ? "max-w-5xl" : "max-w-3xl"} flex-1 px-5 py-10`}>{children}</main>
+      <PublicFooter />
+    </div>
   );
 }

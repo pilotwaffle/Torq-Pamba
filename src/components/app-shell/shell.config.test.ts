@@ -25,6 +25,11 @@ describe("app shell config", () => {
       "Chat",
       "Videos",
       "Schedule",
+      "Accounts",
+      "Analytics",
+      "Reach",
+      "Knowledge",
+      "Creators",
       "Billing",
       "Settings",
     ]);

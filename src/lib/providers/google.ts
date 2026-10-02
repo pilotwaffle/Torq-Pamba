@@ -1,6 +1,16 @@
+import { catalog } from "@/lib/models";
 import { catalogVideoProvider } from "./catalog";
-import { getJson, nearestDuration, postJson } from "./live";
-import { defineAdapter, ProviderUnavailableError, type ClipPoll, type ClipRequest } from "./types";
+import { getJson, isLive, nearestDuration, postJson } from "./live";
+import { mockGenerateImage } from "./mock";
+import {
+  defineAdapter,
+  ProviderRefusedError,
+  ProviderUnavailableError,
+  type ClipPoll,
+  type ClipRequest,
+  type ImageProvider,
+  type ImageResult,
+} from "./types";
 
 const ROOT = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -182,4 +192,77 @@ export const omniFlash = catalogVideoProvider("omni-flash", {
 export const veoLite = veoProvider("veo-3.1-lite");
 export const veoStandard = veoProvider("veo-3.1-standard");
 
-export const adapter = defineAdapter({ id: "google", video: [omniFlash, veoLite, veoStandard] });
+/**
+ * Nano Banana image models on the Gemini API. Prices and labels come from the
+ * model catalog (src/lib/models/google.ts). The API model ids are unverified
+ * guesses and can be overridden with NANO_BANANA_2_MODEL / NANO_BANANA_PRO_MODEL.
+ */
+const IMAGE_API_MODELS: Record<string, { env: string; fallback: string }> = {
+  "nano-banana-2": { env: "NANO_BANANA_2_MODEL", fallback: "gemini-3.1-flash-image-preview" },
+  "nano-banana-pro": { env: "NANO_BANANA_PRO_MODEL", fallback: "gemini-3-pro-image-preview" },
+};
+
+export function nanoBananaApiModel(id: string): string {
+  const spec = IMAGE_API_MODELS[id];
+  if (!spec) throw new Error(`Unknown image model ${id}`);
+  return process.env[spec.env]?.trim() || spec.fallback;
+}
+
+export function buildNanoBananaRequest(prompt: string) {
+  return {
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: { responseModalities: ["IMAGE"], imageConfig: { aspectRatio: "9:16" } },
+  };
+}
+
+type ImageResponse = {
+  candidates?: { content?: { parts?: { inlineData?: { mimeType?: string; data?: string } }[] } }[];
+};
+
+export function nanoBananaInlineImage(response: ImageResponse): { mimeType: string; bytes: Buffer } | null {
+  for (const part of response.candidates?.[0]?.content?.parts ?? []) {
+    if (part.inlineData?.data) {
+      return { mimeType: part.inlineData.mimeType ?? "image/png", bytes: Buffer.from(part.inlineData.data, "base64") };
+    }
+  }
+  return null;
+}
+
+export async function liveNanoBanana(id: string, prompt: string): Promise<ImageResult> {
+  if (!IMAGE_API_MODELS[id]) throw new ProviderUnavailableError(id, "unknown model");
+  const price = catalog.image(id).usdPerImage;
+  const response = (await postJson(
+    id,
+    `${ROOT}/models/${nanoBananaApiModel(id)}:generateContent`,
+    buildNanoBananaRequest(prompt),
+    keyHeaders(),
+  )) as ImageResponse;
+  const image = nanoBananaInlineImage(response);
+  if (!image) throw new ProviderRefusedError(id, "no image returned (possibly filtered)");
+  // Gemini returns the image inline. It is passed on as a data URL; storing it is the caller's job
+  // (wave 1 media assets are workspace-scoped and image requests carry no workspace).
+  return { providerId: id, url: `data:${image.mimeType};base64,${image.bytes.toString("base64")}`, costUsd: price };
+}
+
+function nanoBanana(id: string): ImageProvider {
+  const model = catalog.image(id);
+  return {
+    id,
+    vendor: "google",
+    label: model.label,
+    pricePerImageUsd: model.usdPerImage,
+    async generateImage(req) {
+      if (isLive(["GEMINI_API_KEY"])) return liveNanoBanana(id, req.prompt);
+      return mockGenerateImage(id, model.usdPerImage, req.prompt);
+    },
+  };
+}
+
+export const nanoBanana2 = nanoBanana("nano-banana-2");
+export const nanoBananaPro = nanoBanana("nano-banana-pro");
+
+export const adapter = defineAdapter({
+  id: "google",
+  video: [omniFlash, veoLite, veoStandard],
+  image: [nanoBanana2, nanoBananaPro],
+});

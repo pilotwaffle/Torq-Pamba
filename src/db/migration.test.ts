@@ -86,14 +86,18 @@ async function rows<T>(query: ReturnType<typeof sql>): Promise<T[]> {
 }
 
 describe("migrations", () => {
-  it("adds every v2 table in one migration after 0000_init", async () => {
+  it("adds every v2 table in one migration after 0000_init, with later migrations after it", async () => {
     const { entries } = await journal();
-    expect(entries.map((entry) => entry.tag)).toEqual(["0000_init", "0001_v2_foundation"]);
+    // Ported feature migrations (phase 2+) follow the foundation, numbered in order.
+    expect(entries.slice(0, 2).map((entry) => entry.tag)).toEqual(["0000_init", "0001_v2_foundation"]);
+    entries.forEach((entry, index) => expect(entry.tag.startsWith(String(index).padStart(4, "0") + "_")).toBe(true));
     const init = (await statements("0000_init")).join("\n");
     const v2 = (await statements("0001_v2_foundation")).join("\n");
+    const later = (await Promise.all(entries.slice(2).map((entry) => statements(entry.tag)))).flat().join("\n");
     for (const table of V2_TABLES) {
       expect(init).not.toContain(`CREATE TABLE "${table}"`);
       expect(v2).toContain(`CREATE TABLE "${table}"`);
+      expect(later).not.toContain(`CREATE TABLE "${table}"`);
     }
   });
 
@@ -113,6 +117,30 @@ describe("migrations", () => {
     );
     const names = new Set(found.map((row) => row.table_name));
     for (const table of V2_TABLES) expect(names, table).toContain(table);
+  });
+
+  it("consolidates the phase 2-4 tables onto the foundation tables (0005 adds columns, 0006 drops the duplicates)", async () => {
+    const { entries } = await journal();
+    expect(entries.map((entry) => entry.tag)).toEqual(expect.arrayContaining(["0005_consolidate_foundation", "0006_drop_phase_duplicates"]));
+    const consolidate = (await statements("0005_consolidate_foundation")).join("\n");
+    expect(consolidate).not.toMatch(/DROP TABLE/);
+    const drops = await statements("0006_drop_phase_duplicates");
+    expect(drops.every((statement) => /^DROP (TABLE|TYPE) /.test(statement))).toBe(true);
+    const found = await rows<{ table_name: string }>(
+      sql`select table_name from information_schema.tables where table_schema = 'public'`,
+    );
+    const names = new Set(found.map((row) => row.table_name));
+    for (const gone of ["social_accounts", "publish_jobs", "post_metrics", "knowledge_tiles", "api_credentials"]) {
+      expect(names, gone).not.toContain(gone);
+    }
+    const added = await rows<{ table_name: string; column_name: string }>(sql`
+      select table_name, column_name from information_schema.columns
+      where table_schema = 'public' and (table_name, column_name) in (
+        ('publishing_connections', 'mode'), ('publish_attempts', 'mode'), ('publish_attempts', 'privacy'),
+        ('post_analytics_snapshots', 'reach'), ('knowledge_items', 'score'),
+        ('api_keys', 'kind'), ('api_keys', 'grant_id'), ('api_keys', 'client_id'))
+    `);
+    expect(added).toHaveLength(8);
   });
 
   it("upgrades a database that already holds main's data", async () => {

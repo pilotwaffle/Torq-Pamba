@@ -62,7 +62,7 @@ Rows are from the parity matrix in the research report (26 September 2026). Stat
 | 3 | Media step: site media plus extra uploads | Site images are imported and images can be added by URL. Each asset stays unused until the user checks "I have the rights to use this" | Match |
 | 5 | Starter avatar: an LLM shortlist matched to the niche, or a generated avatar that spends image credits | Eight stock SVG avatars. A keyword shortlist is matched to the brief niche. A text description generates a deterministic SVG and shows the grok-imagine-image list price ($0.02) before it is saved. Each avatar belongs to one workspace | Beat |
 | 10 | AI avatars ("creators"): community or custom, multiple scenes, exclusive to the workspace | Workspace-exclusive avatars with a name, look, stock voice, and scenes. Kling Avatar and HeyGen Avatar IV are registered adapters and are priced (see the cost section). The chat router’s default chains use the tier video models, not those avatar engines | Match |
-| 12 | Chat agent as the main interface ("make me a video", "reschedule tomorrow’s post"), also exposed as MCP | `/app/chat` plans a video, schedules an approved video ("tomorrow at 9am" or the next good slot), and answers "what’s scheduled?". Every generation shows its price and waits for Generate. A remote MCP server is Phase 4 | Beat |
+| 12 | Chat agent as the main interface ("make me a video", "reschedule tomorrow’s post"), also exposed as MCP | `/app/chat` plans a video, schedules an approved video ("tomorrow at 9am" or the next good slot), and answers "what’s scheduled?". Every generation shows its price and waits for Generate. A remote MCP server at `/api/mcp` (OAuth 2.1 or API key, read-only or write with a monthly credit ceiling) can list, estimate and generate videos and read the schedule, analytics and Knowledge; it cannot approve, schedule or publish | Beat |
 | 13 | Video pipeline: script, scene-by-scene footage, stitch, plus an editor for takes, captions, and text hooks | The agent writes a script split into three scenes, three text-hook variants, and captions from the script. Scenes generate in parallel, then a manifest stitches order, duration, caption track, and hook overlay. The preview is a frame slideshow. No Torq-Pamba logo or watermark is burned in. A separate multi-take editor is not in this phase | Match |
 | 15 | Video models (Grok Imagine, Gemini Omni, Seedance, Nano Banana) with a safety-filter fallback to Grok Imagine | Router tiers below. Default is Omni Flash. Fallback is recorded per attempt. Sora is excluded. Kling 3.0 and Luma from the research notes are not adapters in this repo | Beat |
 | 18 | Approval gate: nothing posts without sign-off | `/app/videos/[id]` previews the clip and asks for a creator nickname, a privacy choice with no default, interaction toggles that start off (comments, duet, stitch), commercial-content disclosure (your brand / branded content), an AI-generated label that starts on, music-usage consent, and express consent. Approve stays disabled until privacy is chosen and the consents are checked. An unapproved video cannot be scheduled | Match |
@@ -318,13 +318,13 @@ Live HTTP runs only when `PROVIDER_MODE=live` and that adapter’s key is set. T
 
 These are enforced in code and covered by tests. Reviewers treat a violation as a defect. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-1. No code path publishes to TikTok, Instagram, or Facebook. The schedule queue does not call TikTok Content Posting, Instagram `media_publish`, or Facebook `video_reels`. A due item becomes `due_manual`.
-2. AI disclosure starts on. `aiGenerated` defaults to true. Turning it off on a video, or turning off the workspace default, requires an explicit confirmation and is written to `audit_log`.
+1. Torq-Pamba may publish to TikTok, Instagram and Facebook through official APIs only. Publish code lives only in src/lib/publish/live/. Barry must approve every post before it publishes. The AI-generated label is always on. No phone-farm, device or managed-account posting. Only TikTok, Instagram and Facebook can be reached. A post publishes only if a workspace owner's approval is on record. `publish_attempts.ai_disclosure` is always true, enforced by a database check, for every video. Source scans pin the official endpoints to `src/lib/publish/live/` and fail on device, emulator, Appium, ADB, private-API or managed-account login code. Mock publishing is the default (`PUBLISH_MODE=live` is required), and due items without targets become `due_manual`. See CONTRIBUTING.md criterion 1.
+2. AI disclosure starts on. `aiGenerated` defaults to true. Turning it off on a video, or turning off the workspace default, requires an explicit confirmation and is written to `audit_log`. That in-app setting never reaches a platform: every publish carries the AI label (rule 1).
 3. The product has no device or SIM farm, no account warming, no account creation, sale, or transfer, no ban evasion, and no tool that strips AI-provenance metadata. The terms forbid those uses.
 4. Stripe is test mode only. `sk_live_` keys throw before checkout or webhooks run. With no secret, checkout is a labeled simulation.
 5. Provider adapters call the network only in live mode with a key, and never when `NODE_ENV` is `test`. The default mode is `mock`.
 
-The schedule page states the same limit: publishing arrives in Phase 2 via official TikTok, Instagram, and Facebook APIs after app review, and Torq-Pamba never posts from devices.
+Rule 1 is Barry's publishing rule (approved by name on 2026-10-02). It replaced the original "no publishing" rule. Publishing goes through the official TikTok Content Posting API, Instagram content publishing and Facebook Page Reels, only to accounts connected with OAuth. The schedule page says: Torq-Pamba never posts from devices.
 
 ## Out of scope (permanently)
 
@@ -334,9 +334,7 @@ Quoted from the research report, section 4E:
 
 Not in this phase:
 
-- Publishing (Phase 2)
-- Reach engine (Phase 3)
-- Public API and MCP (Phase 4)
+Phases 2-4 are on branch `feat/phase2-plus-on-v2` (ported onto the v2 foundation); see `REPORT.md` for what each phase adds and the go-live checklist.
 
 ## Phase 0
 
@@ -350,15 +348,17 @@ Vercel or Railway is enough for this phase.
 
 1. Create a managed Postgres database and set `DATABASE_URL` to its connection string. Do not rely on the embedded PGlite directory on a host whose filesystem is ephemeral.
 2. Run migrations (`npm run db:migrate`, or `npm run setup` on a machine that has the repo). The server also applies `./drizzle` on first use of `getDb()`.
-3. Set `PROVIDER_MODE=mock` unless you intend to spend vendor credit. Live mode still does not publish.
+3. Set `PROVIDER_MODE=mock` unless you intend to spend vendor credit. `PROVIDER_MODE` only controls generation; publishing has its own switch, `PUBLISH_MODE`.
 4. Use a Stripe test secret only. Never set `sk_live_` in this phase. The billing module refuses it.
-5. Set `CRON_SECRET` and call `POST /api/cron/tick` with `Authorization: Bearer <secret>` on a schedule if you want due items to flip to `due_manual` without someone opening the app. The handler does not publish.
+5. Set `CRON_SECRET` and call `POST /api/cron/tick` with `Authorization: Bearer <secret>` on a schedule. With no secret the endpoint refuses every call (401), unless `ALLOW_INSECURE_LOCAL_ENDPOINTS=1` outside production. The tick moves due items to `due_manual` or, when they have connected targets, runs the publish queue.
+6. Set `STRIPE_WEBHOOK_SECRET` before pointing Stripe at `/api/billing/webhook`. With no secret the webhook refuses every call (401), with the same local-only exception.
+7. Install ffmpeg on the host (or set `FFMPEG_PATH`/`FFPROBE_PATH`) so live clips are stitched into one MP4.
 
 `next.config.ts` marks `@electric-sql/pglite` as a server external package. Every page and route that touches the database sets `export const dynamic = "force-dynamic"`.
 
 ## Testing
 
-- Unit: `npm test`. Vitest, Node environment, in-memory PGlite. Covers pricing totals, the router and fallback, approval rules, the schedule transition to `due_manual`, billing’s refusal of live Stripe keys, the credit ledger (concurrent reservations, idempotent grants, refunds on failure) and webhook idempotency, onboarding fetch guards, the v2 migration (no schema drift, workspace cascades, plan seeds), the model, provider, chat tool, and nav registries, the fail-closed cron and webhook endpoints, and a source scan that fails if a forbidden publish endpoint appears under `src/`.
+- Unit: `npm test`. Vitest, Node environment, in-memory PGlite. Covers pricing totals, the router and fallback, approval rules, the schedule transition to `due_manual`, billing’s refusal of live Stripe keys, the credit ledger (concurrent reservations, idempotent grants, refunds on failure) and webhook idempotency, onboarding fetch guards, the v2 migration (no schema drift, workspace cascades, plan seeds), the model, provider, chat tool, and nav registries, the fail-closed cron and webhook endpoints, a source scan that fails if a publish endpoint appears under `src/` outside `src/lib/publish/live/`, and the publishing-rule tests: owner approval, the AI label always on, three platforms only, and no device, emulator or private-API code.
 - Postgres: CI also runs Vitest against Postgres 16 with `DATABASE_URL` set, one file at a time, because `npm test` itself clears `DATABASE_URL`.
 - End to end: `npm run test:e2e`. Playwright drives Chromium through signup, the demo-site onboard, chat, approval, and the queue. The web server is a production build on port 3100 with `PROVIDER_MODE=mock`. Core specs are in `e2e/core/`; each feature adds `e2e/<feature>/` using the helpers in `e2e/support/`.
 - Capture: `npm run capture`, then `bash scripts/make-media.sh`, refreshes `docs/images/` and `docs/media/`.
@@ -371,11 +371,11 @@ The build order for v2 (foundation, then six features in parallel, then publishi
 
 From the research report, section 4E. Durations in that report’s timeline are prior estimates, except the approval lead times, which are the published figures in [docs/PHASE0-CHECKLIST.md](docs/PHASE0-CHECKLIST.md).
 
-**Phase 2: Publish and measure on official APIs.** TikTok Direct Post with the required posting UX, and upload-to-drafts as a fallback. Instagram content publishing, including Trial Reels, and Facebook Page Reels. Analytics from TikTok `video.list` and Instagram insights. An audit log of publish status. Until TikTok’s audit passes, TikTok beta users are limited to 5 per 24 hours and posts stay private.
+**Phase 2: Publish and measure on official APIs.** Built in this branch, mock by default (REPORT.md). TikTok Direct Post with the required posting UX, and upload-to-drafts as a fallback. Instagram content publishing, including Trial Reels, and Facebook Page Reels. Analytics from TikTok `video.list` and Instagram insights. An audit log of publish status. Until TikTok’s audit passes, TikTok beta users are limited to 5 per 24 hours and posts stay private.
 
-**Phase 3: Reach engine.** Hook-variant generation. Instagram Trial Reels as an organic hook test. A hand-off so the customer can run Spark Ads and partnership ads in their own Ads Manager. Creator sourcing through TikTok One and one UGC marketplace. Writing test winners back into the brand knowledge. Programmatic use of the TikTok and Meta marketing APIs is later, and its approval lead time is unknown.
+**Phase 3: Reach engine.** Built in this branch without marketing-API calls (REPORT.md). Hook-variant generation. Instagram Trial Reels as an organic hook test. A hand-off so the customer can run Spark Ads and partnership ads in their own Ads Manager. Creator sourcing through TikTok One and one UGC marketplace. Writing test winners back into the brand knowledge. Programmatic use of the TikTok and Meta marketing APIs is later, and its approval lead time is unknown.
 
-**Phase 4: Platform.** A public REST API. A remote MCP server (OAuth 2.1, read-only mode, a spending cap). A managed done-with-you service in which the client stays the account owner and approves posts. Free marketing tools from matrix row 34, except a metadata scrubber, which stays on the permanent out-of-scope list.
+**Phase 4: Platform.** Built in this branch (see `docs/API.md` and REPORT.md). A public REST API. A remote MCP server (OAuth 2.1, read-only mode, a monthly credit ceiling). A managed done-with-you service in which the client stays the account owner and approves posts. Free marketing tools from matrix row 34, except a metadata scrubber, which stays on the permanent out-of-scope list.
 
 ## License
 

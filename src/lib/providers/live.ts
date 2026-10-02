@@ -61,6 +61,50 @@ async function readBody(providerId: string, response: Response): Promise<unknown
   return json;
 }
 
+export type PollOptions = {
+  /** First wait between polls. Default 5 s. */
+  intervalMs?: number;
+  /** Backoff ceiling. Default 20 s. */
+  maxIntervalMs?: number;
+  /** Give up after this long. Default PROVIDER_POLL_TIMEOUT_MS or 10 minutes. */
+  timeoutMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+};
+
+export function pollTimeoutMs(): number {
+  const raw = Number(process.env.PROVIDER_POLL_TIMEOUT_MS ?? "");
+  return Number.isFinite(raw) && raw > 0 ? raw : 10 * 60_000;
+}
+
+/**
+ * Poll a long-running job until `check` returns a value (not null), with
+ * 5 s → 20 s exponential backoff and a 10 minute default budget. Clip jobs use
+ * the async job runner (src/lib/jobs); this is for the publishers' status polls.
+ */
+export async function pollUntil<T>(
+  providerId: string,
+  check: () => Promise<T | null>,
+  options: PollOptions = {},
+): Promise<T> {
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const now = options.now ?? Date.now;
+  const timeoutMs = options.timeoutMs ?? pollTimeoutMs();
+  const maxInterval = options.maxIntervalMs ?? 20_000;
+  let interval = options.intervalMs ?? 5_000;
+  const started = now();
+  for (;;) {
+    const result = await check();
+    if (result !== null) return result;
+    const elapsed = now() - started;
+    if (elapsed + interval > timeoutMs) {
+      throw new ProviderUnavailableError(providerId, `timed out after ${Math.round(elapsed / 1000)}s`);
+    }
+    await sleep(interval);
+    interval = Math.min(maxInterval, Math.round(interval * 1.5));
+  }
+}
+
 /** Nearest allowed value, preferring the larger one on a tie; the stitcher trims or pads to the scene length. */
 export function nearestDuration(target: number, allowed: readonly number[]): number {
   let best = allowed[0] ?? target;

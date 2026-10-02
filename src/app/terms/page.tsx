@@ -8,7 +8,7 @@ const sections: { title: string; paragraphs: string[]; list?: string[] }[] = [
     title: "The service",
     paragraphs: [
       "Torq-Pamba is a studio for making short AI-generated videos for a brand, getting a person to approve them, and placing approved videos on a schedule.",
-      "The service does not publish videos to TikTok, Instagram, or Facebook. When a scheduled time arrives, the item is marked ready for you to publish manually. A later phase may send videos through those platforms' official APIs after their app review. That phase is not available today, and the product never posts from a device.",
+      "The service publishes only videos you approved, only to TikTok, Instagram, or Facebook accounts you connected, and only through those platforms' official APIs. When a scheduled item has no connected account, it is marked ready for you to publish manually. The product never posts from a device.",
     ],
   },
   {
@@ -51,7 +51,8 @@ const sections: { title: string; paragraphs: string[]; list?: string[] }[] = [
     title: "Third-party platforms",
     paragraphs: [
       "TikTok's terms and Meta's terms (including Instagram and Facebook) apply when you use those services. Torq-Pamba is not those companies and does not control their review, reach, or enforcement.",
-      "This phase does not connect social accounts. Phase 2, if it ships, will use official OAuth after app review, and only the permissions needed to act through those platforms' APIs. It will not post from devices.",
+      "You may connect TikTok, Instagram, or Facebook accounts you own or manage. Connection uses each platform's official OAuth and asks only for the permissions needed to publish and read analytics through their official APIs. Torq-Pamba posts only content you approved, only to accounts you selected, and never posts from devices.",
+      "Until TikTok completes its Content Posting audit of this app, TikTok posts are private (Only me) and limited to 5 creators per 24 hours.",
     ],
   },
   {
