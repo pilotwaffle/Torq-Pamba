@@ -3,6 +3,8 @@ import { buildPlan, planCost } from "@/lib/agent/plan";
 import { workspaceAnalytics } from "@/lib/analytics";
 import { listWorkspaceAvatars } from "@/lib/avatars/store";
 import { remainingBudgetUsd } from "@/lib/budget";
+import { CreditCeilingError, videoChargedCredits } from "@/lib/credits/charges";
+import { formatCredits, quoteClipCredits } from "@/lib/credits/pricing";
 import { estimateClipCost, type Tier } from "@/lib/pricing";
 import { listPublishJobs } from "@/lib/publish/queue";
 import { listTiles, originOf, provenHooks } from "@/lib/reach/knowledge";
@@ -10,7 +12,7 @@ import { workspaceById } from "@/lib/reach/experiments";
 import { BudgetExceededError, generateVideo, parseManifest } from "@/lib/router";
 import { listSchedule } from "@/lib/schedule";
 import { getWorkspaceVideo, listVideos } from "@/lib/videos";
-import { creditsForUsd, grantSpendCredits, grantSpendUsd, type Principal } from "./credentials";
+import { grantSpendCredits, grantSpendUsd, type Principal } from "./credentials";
 
 /**
  * Operations shared by the REST API (/api/v1) and the MCP server (/api/mcp).
@@ -30,7 +32,8 @@ export class ApiError extends Error {
   }
 }
 
-export type OperationResult = { data: unknown; costUsd: number; status?: number };
+/** `credits` = ledger credits the operation charged (logged in `api_requests.credits`). */
+export type OperationResult = { data: unknown; costUsd: number; credits?: number; status?: number };
 
 const TIERS = ["budget", "standard", "premium"] as const;
 
@@ -147,15 +150,19 @@ export async function createVideoOp(principal: Principal, input: unknown): Promi
     provenHooks: proven.hooks,
   });
   const estimate = planCost(plan, body.tier as Tier);
+  // The ceiling counts ledger credits: the same quote generateVideo reserves.
+  // This early check gives a clear 402 before anything is queued; the
+  // reservation re-checks it under the workspace lock, so parallel calls
+  // cannot overspend.
+  const needed = quoteClipCredits({ tier: body.tier as Tier, durationS: plan.scenes.reduce((sum, scene) => sum + scene.durationS, 0) }).total;
   if (principal.maxCredits !== null) {
     const used = await grantSpendCredits(principal.grantId);
     const left = Math.max(0, principal.maxCredits - used);
-    const needed = creditsForUsd(estimate.total);
     if (needed > left) {
       throw new ApiError(
         402,
         "spend_cap_exceeded",
-        `Estimated ${needed} credits ($${estimate.total.toFixed(2)}) is over the ${left} credits left on this credential's monthly credit ceiling.`,
+        `This costs ${formatCredits(needed)}, over the ${formatCredits(left)} left on this credential's monthly credit ceiling.`,
       );
     }
   }
@@ -170,23 +177,28 @@ export async function createVideoOp(principal: Principal, input: unknown): Promi
       hook: plan.hooks[body.hookIndex] ?? plan.hooks[0],
       voiceLines: plan.scenes.map((scene) => scene.line),
       scenes: plan.scenes,
+      apiGrant: { grantId: principal.grantId, maxCredits: principal.maxCredits },
     });
   } catch (error) {
     if (error instanceof BudgetExceededError) throw new ApiError(402, "budget_exceeded", error.message);
+    if (error instanceof CreditCeilingError) throw new ApiError(402, "spend_cap_exceeded", error.message);
     throw error;
   }
   if (!result.ok) throw new ApiError(422, "generation_failed", result.error);
   const video = await getWorkspaceVideo(workspace.id, result.videoId);
   const costUsd = Number(video?.costActualUsd ?? 0);
+  const credits = await videoChargedCredits(result.videoId);
   return {
     status: 201,
     costUsd,
+    credits,
     data: {
       id: result.videoId,
       title: video?.title ?? plan.title,
       status: video?.status ?? "ready",
       costUsd,
       estimateUsd: estimate.total,
+      credits,
       next: "Approve the video in the studio before it can be scheduled or published.",
     },
   };

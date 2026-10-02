@@ -1,7 +1,8 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { creditCharges, videos } from "@/db/schema";
 import type { chargeKind } from "@/db/schema/enums";
+import { formatCredits } from "./pricing";
 import { appendEntry, CreditsError, ensureSignupGrant, InsufficientCreditsError, lockBalance, type Tx } from "./ledger";
 
 export type ChargeKind = (typeof chargeKind.enumValues)[number];
@@ -17,7 +18,62 @@ export type ReserveInput = {
   costUsd?: number;
   videoId?: string | null;
   createdBy?: string | null;
+  /**
+   * The API key or OAuth grant spending these credits, with its monthly
+   * `max_credits` ceiling (null = workspace balance only). Checked under the
+   * workspace row lock, so parallel API calls cannot overspend the ceiling.
+   */
+  apiGrant?: { grantId: string; maxCredits: number | null } | null;
 };
+
+/** A reservation would take an API key or OAuth grant over its monthly credit ceiling. */
+export class CreditCeilingError extends CreditsError {
+  readonly required: number;
+  readonly left: number;
+
+  constructor(required: number, left: number) {
+    super(
+      `This costs ${formatCredits(required)}, over the ${formatCredits(left)} left on this credential's monthly credit ceiling.`,
+    );
+    this.name = "CreditCeilingError";
+    this.required = required;
+    this.left = left;
+  }
+}
+
+function monthStartUtc(now: Date): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+}
+
+/**
+ * Ledger credits an API key or OAuth grant has spent this calendar month (UTC):
+ * reserved plus captured charges. Released charges (failed jobs) cost nothing
+ * and are not counted. This is what `api_keys.max_credits` caps.
+ */
+export async function grantChargedCredits(grantId: string, now = new Date(), tx?: Tx): Promise<number> {
+  const db = tx ?? (await getDb());
+  const [row] = await db
+    .select({ total: sql<string>`coalesce(sum(${creditCharges.credits}), 0)` })
+    .from(creditCharges)
+    .where(
+      and(
+        eq(creditCharges.apiGrantId, grantId),
+        inArray(creditCharges.status, ["reserved", "captured"]),
+        gte(creditCharges.createdAt, monthStartUtc(now)),
+      ),
+    );
+  return Number(row?.total ?? 0);
+}
+
+/** Ledger credits charged for one video: reserved plus captured, never released. */
+export async function videoChargedCredits(videoId: string): Promise<number> {
+  const db = await getDb();
+  const [row] = await db
+    .select({ total: sql<string>`coalesce(sum(${creditCharges.credits}), 0)` })
+    .from(creditCharges)
+    .where(and(eq(creditCharges.videoId, videoId), inArray(creditCharges.status, ["reserved", "captured"])));
+  return Number(row?.total ?? 0);
+}
 
 /**
  * Takes the quoted credits off the balance before a job starts, so parallel
@@ -29,6 +85,11 @@ export async function reserveCredits(input: ReserveInput): Promise<{ chargeId: s
   const db = await getDb();
   return db.transaction(async (tx) => {
     const balance = await lockBalance(tx, input.workspaceId);
+    const ceiling = input.apiGrant?.maxCredits ?? null;
+    if (input.apiGrant && ceiling !== null) {
+      const left = Math.max(0, ceiling - (await grantChargedCredits(input.apiGrant.grantId, new Date(), tx)));
+      if (input.credits > left) throw new CreditCeilingError(input.credits, left);
+    }
     if (balance < input.credits) throw new InsufficientCreditsError(input.credits, balance);
     const [charge] = await tx
       .insert(creditCharges)
@@ -41,6 +102,7 @@ export async function reserveCredits(input: ReserveInput): Promise<{ chargeId: s
         credits: input.credits,
         costUsd: input.costUsd ?? 0,
         videoId: input.videoId ?? null,
+        apiGrantId: input.apiGrant?.grantId ?? null,
       })
       .returning({ id: creditCharges.id });
     if (!charge) throw new CreditsError("Could not reserve credits");
@@ -140,7 +202,11 @@ export async function releaseCredits(chargeId: string, reason = "Refund: generat
   });
 }
 
-/** `reserveCredits` for call sites that report "not enough credits" as a result instead of an exception. */
+/**
+ * `reserveCredits` for call sites that report "not enough credits" as a result
+ * instead of an exception. A CreditCeilingError still throws, so the API can
+ * answer 402 spend_cap_exceeded.
+ */
 export async function holdCredits(
   input: ReserveInput,
 ): Promise<{ ok: true; chargeId: string } | { ok: false; error: string; required: number; balance: number }> {

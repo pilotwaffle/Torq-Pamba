@@ -147,7 +147,7 @@ async function callTool(principal: Principal, params: Record<string, unknown> | 
   const args = params?.arguments && typeof params.arguments === "object" ? (params.arguments as Record<string, unknown>) : {};
   try {
     const result = await tool.run(principal, args);
-    await recordRequest({ principal, surface: "mcp", operation: tool.name, status: result.status ?? 200, costUsd: result.costUsd });
+    await recordRequest({ principal, surface: "mcp", operation: tool.name, status: result.status ?? 200, costUsd: result.costUsd, credits: result.credits });
     return {
       result: {
         content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }],

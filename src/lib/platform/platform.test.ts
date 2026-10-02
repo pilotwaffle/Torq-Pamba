@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import { getDb } from "@/db";
 import { apiKeys, apiRequests, videos, workspaces } from "@/db/schema";
 import { signupAccount } from "@/lib/auth/account";
+import { videoChargedCredits } from "@/lib/credits/charges";
+import { quoteClipCredits } from "@/lib/credits/pricing";
 import { saveServiceRequest } from "@/lib/service";
 import {
   authorizationServerMetadata,
@@ -17,7 +19,6 @@ import {
 import {
   authenticate,
   createApiKey,
-  creditsForUsd,
   grantSpendCredits,
   grantSpendUsd,
   hashSecret,
@@ -130,20 +131,44 @@ describe("REST /api/v1", () => {
     const write = await createApiKey({ workspaceId: workspace.id, name: "write", scope: "write", maxCredits: 2000, actor: user.id });
     const created = await rest("videos", write.key, { method: "POST", body: { prompt: "30s video about oat-milk cold brew", durationS: 30 } });
     expect(created.status).toBe(201);
-    const body = (await created.json()) as { data: { id: string; status: string; costUsd: number } };
+    const body = (await created.json()) as { data: { id: string; status: string; costUsd: number; credits: number } };
     expect(body.data.status).toBe("ready");
     expect(body.data.costUsd).toBeGreaterThan(0);
     expect(await grantSpendUsd(write.credential.grantId)).toBe(body.data.costUsd);
-    expect(await grantSpendCredits(write.credential.grantId)).toBe(creditsForUsd(body.data.costUsd));
-    expect(await grantSpendCredits(write.credential.grantId)).toBeGreaterThan(0);
+    // The ceiling counts ledger credits: exactly what the ledger charged for this video.
+    const charged = await videoChargedCredits(body.data.id);
+    expect(charged).toBeGreaterThan(0);
+    expect(charged).toBeLessThanOrEqual(quoteClipCredits({ tier: "standard", durationS: 30 }).total);
+    expect(body.data.credits).toBe(charged);
+    expect(await grantSpendCredits(write.credential.grantId)).toBe(charged);
+    const db = await getDb();
+    const logged = await db.select().from(apiRequests).where(eq(apiRequests.grantId, write.credential.grantId));
+    expect(logged.find((row) => row.status === 201)?.credits).toBe(charged);
     const detail = await rest(`videos/${body.data.id}`, write.key);
     expect(await detail.json()).toMatchObject({ data: { id: body.data.id, status: "ready", aiGenerated: true, publishJobs: [] } });
 
     const refused = await rest("videos", write.key, { method: "POST", body: { prompt: "30s video about [refuse-all] things" } });
     expect(refused.status).toBe(422);
     expect(await grantSpendUsd(write.credential.grantId)).toBe(body.data.costUsd);
+    // A failed generation releases its reservation, so it does not count against the ceiling.
+    expect(await grantSpendCredits(write.credential.grantId)).toBe(charged);
     const list = (await (await rest("videos?limit=5", write.key)).json()) as { data: { status: string }[] };
     expect(list.data.map((row) => row.status).sort()).toEqual(["failed", "ready"]);
+  });
+
+  it("enforces the key's credit ceiling in ledger credits, even for parallel requests", async () => {
+    const { workspace, user, db } = await setup("rest-ceiling-race");
+    const quote = quoteClipCredits({ tier: "standard", durationS: 30 }).total;
+    // Room for one 30s video, not two.
+    const key = await createApiKey({ workspaceId: workspace.id, name: "w", scope: "write", maxCredits: quote + Math.floor(quote / 2), actor: user.id });
+    const responses = await Promise.all(
+      [0, 1].map(() => rest("videos", key.key, { method: "POST", body: { prompt: "30s video about cold brew", durationS: 30 } })),
+    );
+    expect(responses.map((response) => response.status).sort()).toEqual([201, 402]);
+    const refused = responses.find((response) => response.status === 402)!;
+    expect(await refused.json()).toMatchObject({ error: { code: "spend_cap_exceeded" } });
+    expect(await grantSpendCredits(key.credential.grantId)).toBeLessThanOrEqual(quote);
+    expect((await db.select().from(videos).where(eq(videos.workspaceId, workspace.id))).length).toBe(1);
   });
 
   it("returns 402 over the key's spending cap or the workspace budget, before any generation", async () => {
@@ -235,10 +260,12 @@ describe("MCP /api/mcp", () => {
     const tokens = await issueOAuthTokens({ workspaceId: workspace.id, clientId: "tpc_y", scope: "write", maxCredits: 1500, actor: user.id });
     const created = (await (
       await mcp(tokens.accessToken, { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "create_video", arguments: { prompt: "30s video about cold brew" } } })
-    ).json()) as { result: { isError: boolean; structuredContent: { data: { costUsd: number } } } };
+    ).json()) as { result: { isError: boolean; structuredContent: { data: { id: string; costUsd: number } } } };
     expect(created.result.isError).toBe(false);
     expect(await grantSpendUsd(tokens.grantId)).toBe(created.result.structuredContent.data.costUsd);
-    expect(await grantSpendCredits(tokens.grantId)).toBe(creditsForUsd(created.result.structuredContent.data.costUsd));
+    const charged = await videoChargedCredits(created.result.structuredContent.data.id);
+    expect(charged).toBeGreaterThan(0);
+    expect(await grantSpendCredits(tokens.grantId)).toBe(charged);
   });
 });
 

@@ -14,7 +14,7 @@ export default function ApiDocsPage() {
           <h2 className="text-lg font-semibold">Keys</h2>
           <p>
             Create a key in the studio under Settings → API keys and MCP. Keys are shown once and stored as a SHA-256 hash. A read-only key cannot generate.
-            A monthly credit ceiling on a key ($0.01 per credit) limits what calls through it can spend; the workspace budget still applies. Failed generations are never charged.
+            A monthly credit ceiling on a key limits how many credits calls through it can spend; the workspace budget still applies. Failed generations are never charged.
           </p>
         </section>
         <section>

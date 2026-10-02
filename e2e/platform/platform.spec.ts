@@ -32,8 +32,9 @@ test("creates API keys, generates through REST and MCP within scope, and revokes
   expect(denied.status()).toBe(403);
   const created = await api.post("/api/v1/videos", { headers: { "x-api-key": writeKey }, data: { prompt: "30s video about oat-milk cold brew" } });
   expect(created.status()).toBe(201);
-  const video = (await created.json()).data as { id: string; costUsd: number };
+  const video = (await created.json()).data as { id: string; costUsd: number; credits: number };
   expect(video.costUsd).toBeGreaterThan(0);
+  expect(video.credits).toBeGreaterThan(0);
 
   const rpc = (key: string, body: unknown) =>
     api.post("/api/mcp", { headers: { authorization: `Bearer ${key}`, accept: "application/json, text/event-stream" }, data: body });
@@ -47,8 +48,8 @@ test("creates API keys, generates through REST and MCP within scope, and revokes
 
   await page.reload();
   const table = page.getByRole("table", { name: "API access" });
-  // Credits used / ceiling ($0.01 per credit; costs are whole cents), then the USD spend.
-  const used = Math.round(video.costUsd * 100).toLocaleString("en-US");
+  // Ledger credits charged under the ceiling, then the provider USD spend.
+  const used = video.credits.toLocaleString("en-US");
   await expect(table.getByRole("row").filter({ hasText: "Writer" })).toContainText(`${used} / 2,000 ($${video.costUsd.toFixed(2)})`);
   await page.getByRole("button", { name: "Revoke Read bot" }).click();
   await expect(page.getByRole("status")).toContainText("Access revoked.");

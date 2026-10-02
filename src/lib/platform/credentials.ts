@@ -3,6 +3,7 @@ import { and, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { apiKeys, apiRequests, type ApiKey } from "@/db/schema";
 import { writeAudit } from "@/lib/audit";
+import { grantChargedCredits } from "@/lib/credits/charges";
 import { roundCents } from "@/lib/pricing";
 
 /**
@@ -14,7 +15,8 @@ import { roundCents } from "@/lib/pricing";
  *
  * Scope is stored as `scopes` plus the `read_only` flag; the monthly spending
  * ceiling is `max_credits`, counted per grant (a key is its own grant; an
- * OAuth grant's rotating tokens share `grant_id`).
+ * OAuth grant's rotating tokens share `grant_id`) in ledger credits: the
+ * `credit_charges` rows the grant started (see `grantChargedCredits`).
  */
 
 export type Scope = "read" | "write";
@@ -30,19 +32,7 @@ export type Principal = {
   clientId: string | null;
 };
 
-/**
- * $0.01 per credit, the rate feat/v2-credits uses. This base has no credit
- * ledger yet, so a generation through the API counts its USD cost at this rate
- * against `api_keys.max_credits`. Switch to the ledger's charged credits when
- * the credits branch lands.
- */
-export const USD_PER_CREDIT = 0.01;
 export const MAX_CREDIT_CEILING = 10_000_000;
-
-export function creditsForUsd(usd: number): number {
-  if (!Number.isFinite(usd) || usd <= 0) return 0;
-  return Math.ceil(Number((usd / USD_PER_CREDIT).toFixed(6)));
-}
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -274,14 +264,9 @@ export async function grantSpendUsd(grantId: string, now = new Date()): Promise<
   return roundCents(Number(row?.total ?? 0));
 }
 
-/** Credits used this calendar month (UTC) by one key or OAuth grant: what `max_credits` caps. */
+/** Ledger credits used this calendar month (UTC) by one key or OAuth grant: what `max_credits` caps. */
 export async function grantSpendCredits(grantId: string, now = new Date()): Promise<number> {
-  const db = await getDb();
-  const [row] = await db
-    .select({ total: sql<string>`coalesce(sum(${apiRequests.credits}), 0)` })
-    .from(apiRequests)
-    .where(and(eq(apiRequests.grantId, grantId), gte(apiRequests.createdAt, monthStartUtc(now))));
-  return Number(row?.total ?? 0);
+  return grantChargedCredits(grantId, now);
 }
 
 export async function recordRequest(input: {
@@ -290,6 +275,8 @@ export async function recordRequest(input: {
   operation: string;
   status: number;
   costUsd?: number;
+  /** Ledger credits the request charged, for the request log. The ceiling reads `credit_charges`, not this. */
+  credits?: number;
 }) {
   const db = await getDb();
   await db.insert(apiRequests).values({
@@ -299,7 +286,7 @@ export async function recordRequest(input: {
     operation: input.operation.slice(0, 80),
     status: input.status,
     costUsd: input.costUsd ?? 0,
-    credits: creditsForUsd(input.costUsd ?? 0),
+    credits: Math.max(0, Math.trunc(input.credits ?? 0)),
   });
 }
 

@@ -2,6 +2,7 @@
  * Credit prices, derived from the model catalog. Pure, safe in client components.
  *
  * One credit retails at $0.01 (Hobby: $16 for 1,600; Pro: $100 for 10,000).
+ * Pricing as built here was confirmed by Barry on 2026-10-02 at 1:47 AM CT.
  * A catalog entry may set `credits` per billing unit; an entry without one is
  * priced at its list cost times `CREDIT_MARKUP`, so a model added on another
  * branch is never free. Each line item rounds up to a whole credit once.

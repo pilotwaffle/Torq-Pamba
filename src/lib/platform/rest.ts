@@ -81,7 +81,7 @@ export async function handleRest(request: Request, segments: string[]): Promise<
   try {
     const result = await route.run(principal, path.match(route.pattern)!, body, new URL(request.url));
     const status = result.status ?? 200;
-    await recordRequest({ principal, surface: "rest", operation: route.operation, status, costUsd: result.costUsd });
+    await recordRequest({ principal, surface: "rest", operation: route.operation, status, costUsd: result.costUsd, credits: result.credits });
     return json(status, { data: result.data });
   } catch (error) {
     if (error instanceof ApiError) {
