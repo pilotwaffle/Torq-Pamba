@@ -28,6 +28,9 @@ export function tokenKey(env: Record<string, string | undefined> = process.env):
   return key;
 }
 
+/** Stored in `publishing_connections.token_key_version`. Bump it when TOKEN_ENCRYPTION_KEY rotates. */
+export const TOKEN_KEY_VERSION = 1;
+
 export function sealToken(plain: string, key = tokenKey()): string {
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", key, iv);

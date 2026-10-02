@@ -1,11 +1,18 @@
 import { PageHeader, cardClass, fieldClass, primaryButton, secondaryButton } from "@/components/ui";
 import { requireWorkspace } from "@/lib/auth/guards";
 import { addTileAction, archiveTileAction, pinTileAction, seedTilesAction } from "@/lib/reach/actions";
-import { KNOWLEDGE_KINDS, KNOWLEDGE_LABEL, listTiles } from "@/lib/reach/knowledge";
+import { KNOWLEDGE_KINDS, KNOWLEDGE_LABEL, listTiles, originOf } from "@/lib/reach/knowledge";
 
 export const dynamic = "force-dynamic";
 
-const SOURCE_LABEL: Record<string, string> = { manual: "Added by hand", experiment: "Hook-test winner", brief: "Brand brief" };
+const SOURCE_LABEL: Record<string, string> = {
+  manual: "Added by hand",
+  experiment: "Hook-test winner",
+  brief: "Brand brief",
+  user: "Added by hand",
+  agent: "Added by the agent",
+  analytics: "From analytics",
+};
 
 export default async function KnowledgePage({
   searchParams,
@@ -79,11 +86,11 @@ export default async function KnowledgePage({
         {tiles.map((tile) => (
           <article key={tile.id} className={`${cardClass} p-4`} aria-label={`${KNOWLEDGE_LABEL[tile.kind]}: ${tile.title}`}>
             <p className="text-xs uppercase tracking-wide text-zinc-500">
-              {KNOWLEDGE_LABEL[tile.kind]} · {SOURCE_LABEL[tile.source] ?? tile.source}
+              {KNOWLEDGE_LABEL[tile.kind]} · {SOURCE_LABEL[originOf(tile)] ?? originOf(tile)}
               {tile.pinned ? " · Pinned" : ""}
             </p>
             <h3 className="mt-1 font-semibold">{tile.title}</h3>
-            {tile.body ? <p className="mt-1 text-sm text-zinc-700">{tile.body}</p> : null}
+            {tile.content ? <p className="mt-1 text-sm text-zinc-700">{tile.content}</p> : null}
             <div className="mt-3 flex gap-3">
               <form action={pinTileAction}>
                 <input type="hidden" name="tileId" value={tile.id} />

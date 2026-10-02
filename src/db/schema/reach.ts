@@ -1,12 +1,13 @@
-import { boolean, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { videos, workspaces } from "./core";
-import { adHandoffKind, adHandoffStatus, experimentStatus, knowledgeTileKind } from "./enums";
-import { publishJobs, socialAccounts } from "./publishing";
+import { adHandoffKind, adHandoffStatus, experimentStatus } from "./enums";
+import { publishAttempts, publishingConnections } from "./publishing";
 
 // Phase 3: reach engine (ported from feat/phase2-plus). Hook tests run as
-// Instagram Trial Reels through the phase 2 publish queue; winners become
-// Knowledge tiles. `knowledge_tiles` predates the foundation's `knowledge_items`
-// placeholder (left untouched); consolidating them is an owner decision.
+// Instagram Trial Reels through the phase 2 publish queue (publish_attempts);
+// winners are written to the foundation's knowledge_items. Column names that
+// say "job" or "account" are kept from 0003 and point at publish_attempts and
+// publishing_connections since 0005.
 
 /** One hook test: the approved base video plus re-cut variants with different opening hooks. */
 export const hookExperiments = pgTable(
@@ -23,7 +24,7 @@ export const hookExperiments = pgTable(
     /** views | engagement */
     metric: text("metric").notNull().default("views"),
     minViews: integer("min_views").notNull().default(300),
-    accountId: uuid("account_id").references(() => socialAccounts.id, { onDelete: "set null" }),
+    accountId: uuid("account_id").references(() => publishingConnections.id, { onDelete: "set null" }),
     winnerVariantId: uuid("winner_variant_id"),
     decision: jsonb("decision").$type<Record<string, unknown>>(),
     createdBy: text("created_by").notNull().default("user"),
@@ -50,34 +51,10 @@ export const hookVariants = pgTable(
     videoId: uuid("video_id")
       .notNull()
       .references(() => videos.id, { onDelete: "cascade" }),
-    publishJobId: uuid("publish_job_id").references(() => publishJobs.id, { onDelete: "set null" }),
+    publishJobId: uuid("publish_job_id").references(() => publishAttempts.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [uniqueIndex("hook_variants_label_idx").on(table.experimentId, table.label)],
-);
-
-/** Brand knowledge the agent reuses: proven hooks, angles, audience notes. */
-export const knowledgeTiles = pgTable(
-  "knowledge_tiles",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    workspaceId: uuid("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
-    kind: knowledgeTileKind("kind").notNull(),
-    title: text("title").notNull(),
-    body: text("body").notNull().default(""),
-    /** manual | experiment | brief */
-    source: text("source").notNull().default("manual"),
-    evidence: jsonb("evidence").$type<Record<string, unknown>>().notNull().default({}),
-    score: integer("score").notNull().default(0),
-    pinned: boolean("pinned").notNull().default(false),
-    experimentId: uuid("experiment_id").references(() => hookExperiments.id, { onDelete: "set null" }),
-    createdBy: text("created_by").notNull().default("user"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    archivedAt: timestamp("archived_at", { withTimezone: true }),
-  },
-  (table) => [index("knowledge_tiles_workspace_idx").on(table.workspaceId, table.kind)],
 );
 
 /** Spark Ads / partnership-ads hand-off. The customer runs the ad in their own Ads Manager. */
@@ -91,7 +68,7 @@ export const adHandoffs = pgTable(
     videoId: uuid("video_id")
       .notNull()
       .references(() => videos.id, { onDelete: "cascade" }),
-    jobId: uuid("job_id").references(() => publishJobs.id, { onDelete: "set null" }),
+    jobId: uuid("job_id").references(() => publishAttempts.id, { onDelete: "set null" }),
     kind: adHandoffKind("kind").notNull(),
     status: adHandoffStatus("status").notNull().default("awaiting_creator"),
     creatorHandle: text("creator_handle").notNull().default(""),

@@ -5,12 +5,12 @@ import { listWorkspaceAvatars } from "@/lib/avatars/store";
 import { remainingBudgetUsd } from "@/lib/budget";
 import { estimateClipCost, roundCents, type Tier } from "@/lib/pricing";
 import { listPublishJobs } from "@/lib/publish/queue";
-import { listTiles, provenHooks } from "@/lib/reach/knowledge";
+import { listTiles, originOf, provenHooks } from "@/lib/reach/knowledge";
 import { workspaceById } from "@/lib/reach/experiments";
 import { BudgetExceededError, generateVideo, parseManifest } from "@/lib/router";
 import { listSchedule } from "@/lib/schedule";
 import { getWorkspaceVideo, listVideos } from "@/lib/videos";
-import { grantSpendUsd, type Principal } from "./credentials";
+import { creditsForUsd, grantSpendCredits, grantSpendUsd, type Principal } from "./credentials";
 
 /**
  * Operations shared by the REST API (/api/v1) and the MCP server (/api/mcp).
@@ -64,7 +64,7 @@ async function workspaceOf(principal: Principal) {
 export async function getWorkspaceInfo(principal: Principal): Promise<OperationResult> {
   const workspace = await workspaceOf(principal);
   const budget = await remainingBudgetUsd(workspace);
-  const spent = await grantSpendUsd(principal.grantId);
+  const [spent, spentCredits] = await Promise.all([grantSpendUsd(principal.grantId), grantSpendCredits(principal.grantId)]);
   return {
     costUsd: 0,
     data: {
@@ -75,7 +75,8 @@ export async function getWorkspaceInfo(principal: Principal): Promise<OperationR
       credential: {
         kind: principal.kind === "key" ? "api_key" : "oauth",
         scope: principal.scope,
-        spendCapUsd: principal.spendCapUsd,
+        maxCredits: principal.maxCredits,
+        creditsUsedThisMonth: spentCredits,
         spentThisMonthUsd: spent,
       },
     },
@@ -146,14 +147,15 @@ export async function createVideoOp(principal: Principal, input: unknown): Promi
     provenHooks: proven.hooks,
   });
   const estimate = planCost(plan, body.tier as Tier);
-  if (principal.spendCapUsd !== null) {
-    const spent = await grantSpendUsd(principal.grantId);
-    const left = roundCents(Math.max(0, principal.spendCapUsd - spent));
-    if (Math.round(estimate.total * 100) > Math.round(left * 100)) {
+  if (principal.maxCredits !== null) {
+    const used = await grantSpendCredits(principal.grantId);
+    const left = Math.max(0, principal.maxCredits - used);
+    const needed = creditsForUsd(estimate.total);
+    if (needed > left) {
       throw new ApiError(
         402,
         "spend_cap_exceeded",
-        `Estimated $${estimate.total.toFixed(2)} is over the $${left.toFixed(2)} left on this credential's monthly spending cap.`,
+        `Estimated ${needed} credits ($${estimate.total.toFixed(2)}) is over the ${left} credits left on this credential's monthly credit ceiling.`,
       );
     }
   }
@@ -203,6 +205,13 @@ export async function knowledgeOp(principal: Principal): Promise<OperationResult
   const tiles = await listTiles(principal.workspaceId);
   return {
     costUsd: 0,
-    data: tiles.map((tile) => ({ kind: tile.kind, title: tile.title, body: tile.body, source: tile.source, score: tile.score, pinned: tile.pinned })),
+    data: tiles.map((tile) => ({
+      kind: tile.kind,
+      title: tile.title,
+      body: tile.content,
+      source: originOf(tile),
+      score: tile.score,
+      pinned: tile.pinned,
+    })),
   };
 }

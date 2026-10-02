@@ -90,7 +90,7 @@ export default async function ExperimentPage({
                   </Link>
                 </td>
                 <td className="px-4 py-3">{row.pattern === "control" || isHookPattern(row.pattern) ? PATTERN_LABEL[row.pattern as keyof typeof PATTERN_LABEL] : row.pattern}</td>
-                <td className="px-4 py-3">{row.jobStatus ? (row.jobStatus === "succeeded" ? "Posted as Trial Reel" : row.jobStatus) : "Not posted"}</td>
+                <td className="px-4 py-3">{row.jobStatus ? (row.jobStatus === "published" ? "Posted as Trial Reel" : row.jobStatus) : "Not posted"}</td>
                 <td className="px-4 py-3 text-right">{row.measured ? number.format(row.views) : "—"}</td>
                 <td className="px-4 py-3 text-right">{row.measured ? `${row.engagementRate}%` : "—"}</td>
               </tr>

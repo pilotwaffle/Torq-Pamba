@@ -4,12 +4,12 @@ Torq-Pamba exposes one set of operations two ways: a REST API at `/api/v1` and a
 
 ## Credentials
 
-- **API keys** (`tpk_…`). Create them in **Settings → API keys and MCP** (`/app/settings/api`, owner or admin). A key is shown once and stored only as a SHA-256 hash. Choose **Read only** or **Read and generate**, and optionally a monthly spending cap in USD.
+- **API keys** (`tpk_…`). Create them in **Settings → API keys and MCP** (`/app/settings/api`, owner or admin). A key is shown once and stored only as a SHA-256 hash. Choose **Read only** or **Read and generate**, and optionally a monthly credit ceiling (`api_keys.max_credits`, $0.01 per credit until the credits ledger lands).
 - **OAuth 2.1** for MCP clients. Clients discover the server from the 401 response, register dynamically, and send the user through consent, where the user picks read or write and a cap. Access tokens (`tpa_…`) last 1 hour; refresh tokens (`tpr_…`) last 30 days and rotate on use.
 
 Send either as `X-API-Key: <key>` or `Authorization: Bearer <token>`. Revoking a key or connected app takes effect on the next request.
 
-Limits: 120 requests per minute per key or grant (429). Spending caps reset at the start of each calendar month (UTC). Generation also stops at the workspace's monthly budget. Failed generations are never charged.
+Limits: 120 requests per minute per key or grant (429). Credit ceilings reset at the start of each calendar month (UTC). Generation also stops at the workspace's monthly budget. Failed generations are never charged.
 
 ## REST
 

@@ -1,6 +1,6 @@
 import { and, desc, eq, ne } from "drizzle-orm";
 import { getDb } from "@/db";
-import { adHandoffs, publishJobs, videos, type AdHandoff } from "@/db/schema";
+import { adHandoffs, publishAttempts, videos, type AdHandoff } from "@/db/schema";
 import { writeAudit } from "@/lib/audit";
 import { sealToken } from "@/lib/publish/crypto";
 import { getWorkspaceVideo } from "@/lib/videos";
@@ -83,10 +83,10 @@ export async function startHandoff(input: {
   if (open) throw new HandoffError(`${HANDOFF_LABEL[input.kind]} hand-off already exists for this video`);
   const platforms = input.kind === "tiktok_spark" ? ["tiktok"] : ["instagram", "facebook"];
   const jobs = await db
-    .select({ id: publishJobs.id, platform: publishJobs.platform })
-    .from(publishJobs)
-    .where(and(eq(publishJobs.videoId, video.id), eq(publishJobs.status, "succeeded")))
-    .orderBy(desc(publishJobs.updatedAt));
+    .select({ id: publishAttempts.id, platform: publishAttempts.platform })
+    .from(publishAttempts)
+    .where(and(eq(publishAttempts.videoId, video.id), eq(publishAttempts.status, "published")))
+    .orderBy(desc(publishAttempts.completedAt));
   const job = jobs.find((row) => platforms.includes(row.platform)) ?? null;
   const [row] = await db
     .insert(adHandoffs)

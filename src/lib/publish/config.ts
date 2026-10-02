@@ -32,6 +32,16 @@ export function isPlatform(value: string): value is Platform {
   return (PLATFORMS as string[]).includes(value);
 }
 
+/**
+ * Narrows a stored platform to the three this phase publishes to. The
+ * foundation's `social_platform` enum also reserves `youtube`, which has no
+ * publisher yet, so a youtube row fails closed here.
+ */
+export function asPlatform(value: string): Platform {
+  if (!isPlatform(value)) throw new Error(`Publishing to ${value} is not supported yet`);
+  return value;
+}
+
 export function isValidMode(platform: Platform, mode: string): boolean {
   return PLATFORM_MODES[platform].some((option) => option.value === mode);
 }

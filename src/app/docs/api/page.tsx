@@ -14,7 +14,7 @@ export default function ApiDocsPage() {
           <h2 className="text-lg font-semibold">Keys</h2>
           <p>
             Create a key in the studio under Settings → API keys and MCP. Keys are shown once and stored as a SHA-256 hash. A read-only key cannot generate.
-            A monthly spending cap on a key limits what calls through it can spend; the workspace budget still applies. Failed generations are never charged.
+            A monthly credit ceiling on a key ($0.01 per credit) limits what calls through it can spend; the workspace budget still applies. Failed generations are never charged.
           </p>
         </section>
         <section>
@@ -25,7 +25,7 @@ curl -H "X-API-Key: tpk_..." -H "content-type: application/json" \\
   https://YOUR_HOST/api/v1/videos`}</pre>
           <ul className="mt-2 list-disc pl-5">
             <li>GET /me · GET /videos · GET /videos/:id · POST /videos · POST /estimate · GET /schedule · GET /analytics · GET /knowledge</li>
-            <li>401 bad or missing key · 403 read-only key · 402 over the key&apos;s cap or the workspace budget · 422 every model failed (not charged) · 429 over 120 requests a minute</li>
+            <li>401 bad or missing key · 403 read-only key · 402 over the key&apos;s credit ceiling or the workspace budget · 422 every model failed (not charged) · 429 over 120 requests a minute</li>
             <li>Generated videos still need approval in the studio. The API cannot approve, schedule or publish.</li>
           </ul>
         </section>
@@ -38,7 +38,7 @@ curl -H "X-API-Key: tpk_..." -H "content-type: application/json" \\
           </p>
           <p className="mt-2">
             OAuth 2.1: authorization code with PKCE (S256), public clients, dynamic client registration at <code>/api/oauth2/register</code>, metadata at{" "}
-            <code>/.well-known/oauth-authorization-server</code>. On the consent screen you choose read-only or generate, and a monthly spending cap.
+            <code>/.well-known/oauth-authorization-server</code>. On the consent screen you choose read-only or generate, and a monthly credit ceiling.
           </p>
         </section>
       </div>

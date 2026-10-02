@@ -3,7 +3,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { getDb } from "@/db";
 import { oauthClients, oauthCodes } from "@/db/schema";
 import { writeAudit } from "@/lib/audit";
-import { hashSecret, issueOAuthTokens, rotateRefreshToken, validateCap, type Scope } from "./credentials";
+import { hashSecret, issueOAuthTokens, rotateRefreshToken, validateCeiling, type Scope } from "./credentials";
 
 /**
  * OAuth 2.1 authorization server for MCP clients: authorization-code grant with
@@ -144,7 +144,7 @@ export async function createAuthorizationCode(input: {
   workspaceId: string;
   userId: string;
   scope: Scope;
-  spendCapUsd: number | null;
+  maxCredits: number | null;
   now?: Date;
 }): Promise<string> {
   const now = input.now ?? new Date();
@@ -158,7 +158,7 @@ export async function createAuthorizationCode(input: {
     redirectUri: input.request.redirectUri,
     codeChallenge: input.request.codeChallenge,
     scope: input.scope,
-    spendCapUsd: validateCap(input.spendCapUsd),
+    maxCredits: validateCeiling(input.maxCredits),
     resource: input.request.resource,
     expiresAt: new Date(now.getTime() + CODE_TTL_S * 1000),
   });
@@ -166,7 +166,7 @@ export async function createAuthorizationCode(input: {
     workspaceId: input.workspaceId,
     actor: input.userId,
     action: "oauth.authorized",
-    data: { clientId: input.request.clientId, scope: input.scope, spendCapUsd: input.spendCapUsd },
+    data: { clientId: input.request.clientId, scope: input.scope, maxCredits: input.maxCredits },
   });
   return code;
 }
@@ -203,7 +203,7 @@ export async function exchangeAuthorizationCode(input: {
     clientId: row.clientId,
     name: `OAuth: ${client?.name ?? row.clientId}`,
     scope: row.scope,
-    spendCapUsd: row.spendCapUsd === null ? null : Number(row.spendCapUsd),
+    maxCredits: row.maxCredits,
     actor: row.userId,
     now,
   });

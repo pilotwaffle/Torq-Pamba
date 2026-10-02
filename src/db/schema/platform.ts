@@ -1,4 +1,4 @@
-import { boolean, index, integer, jsonb, numeric, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { boolean, index, integer, jsonb, numeric, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { money } from "./columns";
 import { users, videos, workspaces } from "./core";
 import { apiCredentialKind, apiScope, knowledgeKind, knowledgeSource } from "./enums";
@@ -20,6 +20,8 @@ export const knowledgeItems = pgTable(
     videoId: uuid("video_id").references(() => videos.id, { onDelete: "set null" }),
     confidence: numeric("confidence", { precision: 4, scale: 3, mode: "number" }),
     pinned: boolean("pinned").notNull().default(false),
+    /** Added in 0005. Ranking within a kind; for a hook-test winner it is the lift in percent. */
+    score: integer("score").notNull().default(0),
     tags: text("tags").array().notNull().default([]),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -47,57 +49,35 @@ export const apiKeys = pgTable(
     readOnly: boolean("read_only").notNull().default(false),
     /** Monthly credit cap for calls made with this key (Pamba's `max_credits`). Null = workspace limit only. */
     maxCredits: integer("max_credits"),
+    /**
+     * Added in 0005 (phase 4 port). `key` = a workspace API key; `oauth_access` /
+     * `oauth_refresh` = tokens from the MCP OAuth server, stored hashed like keys.
+     */
+    kind: apiCredentialKind("kind").notNull().default("key"),
+    /** Added in 0005. Groups one OAuth grant's rotating tokens. A key is its own grant (grant_id = id; null is read the same way). */
+    grantId: uuid("grant_id"),
+    /** Added in 0005. The OAuth client a token was issued to. */
+    clientId: text("client_id"),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index("api_keys_workspace_idx").on(table.workspaceId)],
+  (table) => [index("api_keys_workspace_idx").on(table.workspaceId), index("api_keys_grant_idx").on(table.grantId)],
 );
 
 // ---------------------------------------------------------------------------
 // Phase 4 platform (ported from feat/phase2-plus): REST v1, the MCP server and
-// its OAuth 2.1 authorization server, and done-with-you leads. These tables
-// back the implemented API. They predate the wave-0 `api_keys` placeholder
-// above, which stays untouched; consolidating the two is an owner decision.
+// its OAuth 2.1 authorization server, and done-with-you leads. Keys and OAuth
+// tokens live in `api_keys` above (0005 added kind, grant_id, client_id); the
+// per-grant monthly ceiling is `api_keys.max_credits`.
 // ---------------------------------------------------------------------------
 
 /**
- * Every machine credential: workspace API keys and OAuth access/refresh tokens.
- * Only a SHA-256 hash of the secret is stored. grant_id groups one OAuth grant's
- * rotating tokens (for keys it is the key's own id) and is what the spend cap counts.
+ * One row per authenticated API or MCP call. cost_usd and credits are non-zero
+ * only for a successful generation. grant_id is the key's id or the OAuth grant.
  */
-export const apiCredentials = pgTable(
-  "api_credentials",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    workspaceId: uuid("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
-    kind: apiCredentialKind("kind").notNull(),
-    name: text("name").notNull().default(""),
-    prefix: text("prefix").notNull(),
-    secretHash: text("secret_hash").notNull(),
-    scope: apiScope("scope").notNull().default("read"),
-    grantId: uuid("grant_id").notNull(),
-    clientId: text("client_id"),
-    /** Monthly cap on generation spend through this key or grant. Null = workspace budget only. */
-    spendCapUsd: money("spend_cap_usd"),
-    createdBy: text("created_by").notNull().default("user"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    expiresAt: timestamp("expires_at", { withTimezone: true }),
-    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
-    revokedAt: timestamp("revoked_at", { withTimezone: true }),
-  },
-  (table) => [
-    uniqueIndex("api_credentials_hash_idx").on(table.secretHash),
-    index("api_credentials_workspace_idx").on(table.workspaceId, table.kind),
-    index("api_credentials_grant_idx").on(table.grantId),
-  ],
-);
-
-/** One row per authenticated API or MCP call. cost_usd is non-zero only for a successful generation. */
 export const apiRequests = pgTable(
   "api_requests",
   {
@@ -110,6 +90,8 @@ export const apiRequests = pgTable(
     operation: text("operation").notNull(),
     status: integer("status").notNull(),
     costUsd: money("cost_usd").notNull().default(0),
+    /** Added in 0005. Credits counted against `api_keys.max_credits`. */
+    credits: integer("credits").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index("api_requests_grant_idx").on(table.grantId, table.createdAt)],
@@ -134,7 +116,8 @@ export const oauthCodes = pgTable("oauth_codes", {
   redirectUri: text("redirect_uri").notNull(),
   codeChallenge: text("code_challenge").notNull(),
   scope: apiScope("scope").notNull(),
-  spendCapUsd: money("spend_cap_usd"),
+  /** Added in 0005 (replaces spend_cap_usd): the credit ceiling the user chose on the consent screen. */
+  maxCredits: integer("max_credits"),
   resource: text("resource"),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   usedAt: timestamp("used_at", { withTimezone: true }),

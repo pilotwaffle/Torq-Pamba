@@ -16,7 +16,7 @@ test("creates API keys, generates through REST and MCP within scope, and revokes
   await expect(page.getByText(readKey)).toHaveCount(0);
   await page.getByLabel("Key name").fill("Writer");
   await page.getByLabel("Access", { exact: true }).selectOption("write");
-  await page.getByLabel("Monthly spending cap (USD)").fill("20");
+  await page.getByLabel("Monthly credit ceiling", { exact: true }).fill("2000");
   await page.getByRole("button", { name: "Create API key" }).click();
   await expect(page.getByLabel("New API key", { exact: true })).not.toHaveText(readKey);
   const writeKey = ((await page.getByLabel("New API key", { exact: true }).textContent()) ?? "").trim();
@@ -47,7 +47,9 @@ test("creates API keys, generates through REST and MCP within scope, and revokes
 
   await page.reload();
   const table = page.getByRole("table", { name: "API access" });
-  await expect(table.getByRole("row").filter({ hasText: "Writer" })).toContainText(`$${video.costUsd.toFixed(2)} / $20.00`);
+  // Credits used / ceiling ($0.01 per credit; costs are whole cents), then the USD spend.
+  const used = Math.round(video.costUsd * 100).toLocaleString("en-US");
+  await expect(table.getByRole("row").filter({ hasText: "Writer" })).toContainText(`${used} / 2,000 ($${video.costUsd.toFixed(2)})`);
   await page.getByRole("button", { name: "Revoke Read bot" }).click();
   await expect(page.getByRole("status")).toContainText("Access revoked.");
   expect((await api.get("/api/v1/me", { headers: { "x-api-key": readKey } })).status()).toBe(401);
@@ -57,7 +59,7 @@ test("creates API keys, generates through REST and MCP within scope, and revokes
   await api.dispose();
 });
 
-test("connects an MCP client with OAuth 2.1 (dynamic registration, consent, PKCE, spending cap)", async ({ page, playwright, baseURL }) => {
+test("connects an MCP client with OAuth 2.1 (dynamic registration, consent, PKCE, credit ceiling)", async ({ page, playwright, baseURL }) => {
   const api = await playwright.request.newContext({ baseURL });
   const resource = await (await api.get("/.well-known/oauth-protected-resource/api/mcp")).json();
   expect(resource.resource).toBe(`${baseURL}/api/mcp`);
@@ -100,7 +102,7 @@ test("connects an MCP client with OAuth 2.1 (dynamic registration, consent, PKCE
   await page.getByLabel("Workspace name").fill("OAuth Studio");
   await page.getByRole("button", { name: "Create account" }).click();
   await expect(page.getByRole("heading", { name: "Allow E2E Agent to use OAuth Studio?" })).toBeVisible();
-  await page.getByLabel("Monthly spending cap for this app (USD)").fill("7.5");
+  await page.getByLabel("Monthly credit ceiling for this app", { exact: true }).fill("750");
   await page.getByRole("button", { name: "Allow" }).click();
   await expect(page.getByText("Client received the code.")).toBeVisible();
   const returned = new URL(callback);
@@ -119,7 +121,7 @@ test("connects an MCP client with OAuth 2.1 (dynamic registration, consent, PKCE
   expect(replay.status()).toBe(400);
 
   const tools = await api.post("/api/mcp", { headers: { authorization: `Bearer ${issued.access_token}` }, data: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "get_workspace", arguments: {} } } });
-  expect((await tools.json()).result.structuredContent.data).toMatchObject({ name: "OAuth Studio", credential: { kind: "oauth", scope: "write", spendCapUsd: 7.5 } });
+  expect((await tools.json()).result.structuredContent.data).toMatchObject({ name: "OAuth Studio", credential: { kind: "oauth", scope: "write", maxCredits: 750 } });
 
   await page.goto("/app/settings/api");
   await expect(page.getByRole("table", { name: "API access" })).toContainText("OAuth: E2E Agent");

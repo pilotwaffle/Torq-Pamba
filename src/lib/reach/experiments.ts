@@ -3,8 +3,8 @@ import { getDb } from "@/db";
 import {
   hookExperiments,
   hookVariants,
-  postMetrics,
-  publishJobs,
+  postAnalyticsSnapshots,
+  publishAttempts,
   videos,
   workspaces,
   type HookExperiment,
@@ -281,13 +281,26 @@ export async function variantStats(experimentId: string): Promise<VariantStats[]
   const jobIds = variants.map((variant) => variant.publishJobId).filter((id): id is string => Boolean(id));
   const db = await getDb();
   const jobs = jobIds.length
-    ? await db.select({ id: publishJobs.id, status: publishJobs.status }).from(publishJobs).where(inArray(publishJobs.id, jobIds))
+    ? await db.select({ id: publishAttempts.id, status: publishAttempts.status }).from(publishAttempts).where(inArray(publishAttempts.id, jobIds))
     : [];
-  const metrics = jobIds.length
-    ? await db.select().from(postMetrics).where(inArray(postMetrics.jobId, jobIds)).orderBy(desc(postMetrics.fetchedAt))
+  const snapshots = jobIds.length
+    ? await db
+        .select()
+        .from(postAnalyticsSnapshots)
+        .where(inArray(postAnalyticsSnapshots.publishAttemptId, jobIds))
+        .orderBy(desc(postAnalyticsSnapshots.capturedAt))
     : [];
   return variants.map((variant) => {
-    const latest = metrics.find((row) => row.jobId === variant.publishJobId);
+    const snapshot = snapshots.find((row) => row.publishAttemptId === variant.publishJobId);
+    const latest = snapshot
+      ? {
+          views: snapshot.views ?? 0,
+          likes: snapshot.likes ?? 0,
+          comments: snapshot.comments ?? 0,
+          shares: snapshot.shares ?? 0,
+          saves: snapshot.saves ?? 0,
+        }
+      : null;
     return {
       variantId: variant.id,
       label: variant.label,
@@ -328,7 +341,7 @@ export async function decideExperiment(input: { workspaceId: string; experimentI
   const metricLabel = experiment.metric === "engagement" ? "engagement" : "views";
   const tile = await addTile({
     workspaceId: input.workspaceId,
-    kind: "hook",
+    kind: "hook_result",
     title: winner.hook,
     body:
       `Won a ${stats.length}-way hook test on Instagram Trial Reels: ${winner.views} views, ${winner.engagementRate}% engagement, ` +
@@ -365,9 +378,9 @@ export async function cancelExperiment(input: { workspaceId: string; experimentI
   const jobIds = variants.map((variant) => variant.publishJobId).filter((id): id is string => Boolean(id));
   if (jobIds.length) {
     await db
-      .update(publishJobs)
-      .set({ status: "canceled", updatedAt: new Date() })
-      .where(and(inArray(publishJobs.id, jobIds), eq(publishJobs.status, "queued")));
+      .update(publishAttempts)
+      .set({ status: "canceled", completedAt: new Date() })
+      .where(and(inArray(publishAttempts.id, jobIds), eq(publishAttempts.status, "pending")));
   }
   await db.update(hookExperiments).set({ status: "canceled" }).where(eq(hookExperiments.id, experiment.id));
   await writeAudit({ workspaceId: input.workspaceId, actor: input.actor, action: "experiment.canceled", data: { experimentId: experiment.id } });

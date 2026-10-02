@@ -3,7 +3,7 @@ import path from "node:path";
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { getDb } from "@/db";
-import { adHandoffs, auditLog, hookExperiments, hookVariants, knowledgeTiles, publishJobs, videos, workspaces } from "@/db/schema";
+import { adHandoffs, auditLog, hookExperiments, hookVariants, knowledgeItems, publishAttempts, videos, workspaces } from "@/db/schema";
 import { refreshMetrics } from "@/lib/analytics";
 import { signupAccount } from "@/lib/auth/account";
 import { connectMockAccount } from "@/lib/publish/accounts";
@@ -108,9 +108,11 @@ describe("hook experiments on Instagram Trial Reels", () => {
       /Instagram Trial Reels/,
     );
     await launchExperiment({ workspaceId: workspace.id, experimentId: experiment.id, accountId: instagram.id, actor: user.id });
-    const jobs = await db.select().from(publishJobs).where(eq(publishJobs.workspaceId, workspace.id));
+    const jobs = await db.select().from(publishAttempts).where(eq(publishAttempts.workspaceId, workspace.id));
     expect(jobs).toHaveLength(2);
-    expect(jobs.every((job) => job.mode === "trial_reel" && job.platform === "instagram" && job.scheduleItemId === null)).toBe(true);
+    expect(
+      jobs.every((job) => job.mode === "trial_reel" && job.platform === "instagram" && job.scheduleItemId === null && job.aiDisclosure && job.status === "pending"),
+    ).toBe(true);
     const [row] = await db.select().from(hookExperiments).where(eq(hookExperiments.id, experiment.id));
     expect(row?.status).toBe("running");
     await expect(launchExperiment({ workspaceId: workspace.id, experimentId: experiment.id, accountId: instagram.id, actor: user.id })).rejects.toThrow(
@@ -126,7 +128,7 @@ describe("hook experiments on Instagram Trial Reels", () => {
     await launchExperiment({ workspaceId: workspace.id, experimentId: experiment.id, accountId: instagram.id, actor: user.id });
     await expect(decideExperiment({ workspaceId: workspace.id, experimentId: experiment.id, actor: user.id })).rejects.toThrow(/has no metrics/);
     expect(await processPublishQueue({ workspaceId: workspace.id })).toEqual({ succeeded: 3, failed: 0 });
-    const posted = await db.select().from(publishJobs).where(eq(publishJobs.workspaceId, workspace.id));
+    const posted = await db.select().from(publishAttempts).where(eq(publishAttempts.workspaceId, workspace.id));
     expect(posted.every((job) => job.privacy === "TRIAL_NON_FOLLOWERS")).toBe(true);
     await refreshMetrics(workspace.id);
     const stats = await variantStats(experiment.id);
@@ -137,8 +139,14 @@ describe("hook experiments on Instagram Trial Reels", () => {
     expect(decision.kind === "winner" && decision.winner.label).toBe(best.label);
     const [row] = await db.select().from(hookExperiments).where(eq(hookExperiments.id, experiment.id));
     expect(row).toMatchObject({ status: "decided", winnerVariantId: best.variantId });
-    expect(tile).toMatchObject({ kind: "hook", title: best.hook, source: "experiment", experimentId: experiment.id });
-    expect(tile.evidence).toMatchObject({ pattern: best.pattern, views: best.views, channel: "instagram_trial_reels" });
+    expect(tile).toMatchObject({ kind: "hook_result", title: best.hook, source: "analytics" });
+    expect(tile.sourceRef).toMatchObject({
+      origin: "experiment",
+      experimentId: experiment.id,
+      pattern: best.pattern,
+      views: best.views,
+      channel: "instagram_trial_reels",
+    });
     const audits = await db.select().from(auditLog).where(eq(auditLog.workspaceId, workspace.id));
     expect(audits.map((entry) => entry.action)).toEqual(expect.arrayContaining(["experiment.created", "experiment.launched", "experiment.decided", "knowledge.written"]));
     await expect(decideExperiment({ workspaceId: workspace.id, experimentId: experiment.id, actor: user.id })).rejects.toThrow(/Only a running/);
@@ -162,8 +170,8 @@ describe("hook experiments on Instagram Trial Reels", () => {
     await refreshMetrics(workspace.id);
     await expect(decideExperiment({ workspaceId: workspace.id, experimentId: experiment.id, actor: user.id })).rejects.toThrow(/Not enough data yet/);
     await cancelExperiment({ workspaceId: workspace.id, experimentId: experiment.id, actor: user.id });
-    const jobs = await db.select().from(publishJobs).where(eq(publishJobs.workspaceId, workspace.id));
-    expect(jobs.map((job) => job.status).sort()).toEqual(["canceled", "succeeded"]);
+    const jobs = await db.select().from(publishAttempts).where(eq(publishAttempts.workspaceId, workspace.id));
+    expect(jobs.map((job) => job.status).sort()).toEqual(["canceled", "published"]);
     const [row] = await db.select().from(hookExperiments).where(eq(hookExperiments.id, experiment.id));
     expect(row?.status).toBe("canceled");
   });
@@ -173,9 +181,11 @@ describe("knowledge tiles", () => {
   it("orders pinned tiles first, then by score, hides archived ones, and stays inside the workspace", async () => {
     const { workspace, user } = await setup("kn-order");
     const other = await setup("kn-other");
-    const low = await addTile({ workspaceId: workspace.id, kind: "hook", title: "Low", score: 1, evidence: { pattern: "pov" }, actor: user.id });
-    await addTile({ workspaceId: workspace.id, kind: "hook", title: "High", score: 40, evidence: { pattern: "number" }, actor: user.id });
-    const note = await addTile({ workspaceId: workspace.id, kind: "insight", title: "Mornings win", actor: user.id });
+    const low = await addTile({ workspaceId: workspace.id, kind: "hook_result", title: "Low", score: 1, evidence: { pattern: "pov" }, actor: user.id });
+    await addTile({ workspaceId: workspace.id, kind: "hook_result", title: "High", score: 40, evidence: { pattern: "number" }, actor: user.id });
+    const note = await addTile({ workspaceId: workspace.id, kind: "learning", title: "Mornings win", actor: user.id });
+    expect(note).toMatchObject({ source: "user", createdBy: user.id, sourceRef: { origin: "manual" } });
+    await expect(addTile({ workspaceId: workspace.id, kind: "hook", title: "Old kind" })).rejects.toThrow(/Choose a tile type/);
     expect((await listTiles(workspace.id)).map((t) => t.title)).toEqual(["High", "Low", "Mornings win"]);
     expect(await togglePin(workspace.id, low.id)).toBe(true);
     expect((await listTiles(workspace.id))[0]?.title).toBe("Low");
@@ -185,15 +195,16 @@ describe("knowledge tiles", () => {
     expect((await listTiles(workspace.id)).map((t) => t.title)).toEqual(["Low", "High"]);
     expect(await listTiles(workspace.id, { includeArchived: true })).toHaveLength(3);
     expect(await listTiles(other.workspace.id)).toEqual([]);
-    await expect(addTile({ workspaceId: workspace.id, kind: "hook", title: "" })).rejects.toThrow(/Title is required/);
+    await expect(addTile({ workspaceId: workspace.id, kind: "hook_result", title: "" })).rejects.toThrow(/Title is required/);
   });
 
-  it("imports audience, angle and tone from the brand brief once", async () => {
+  it("imports audience (brand fact), angle and tone (preference) from the brand brief once", async () => {
     const { workspace, db } = await setup("kn-seed");
     expect(await seedFromBrief(workspace.id, workspace.brief)).toBe(3);
     expect(await seedFromBrief(workspace.id, workspace.brief)).toBe(0);
-    const tiles = await db.select().from(knowledgeTiles).where(eq(knowledgeTiles.workspaceId, workspace.id));
-    expect(tiles.map((t) => `${t.kind}:${t.title}`).sort()).toEqual(["angle:Cold brew delivered", "audience:Night-shift nurses", "insight:Tone: warm"]);
+    const tiles = await db.select().from(knowledgeItems).where(eq(knowledgeItems.workspaceId, workspace.id));
+    expect(tiles.map((t) => `${t.kind}:${t.title}`).sort()).toEqual(["angle:Cold brew delivered", "brand_fact:Night-shift nurses", "preference:Tone: warm"]);
+    expect(tiles.every((t) => t.sourceRef?.origin === "brief")).toBe(true);
     expect(await seedFromBrief(workspace.id, null)).toBe(0);
   });
 });
@@ -203,8 +214,17 @@ describe("ad hand-offs and creator briefs", () => {
     const { workspace, user, video, db } = await setup("ho-spark");
     const tiktok = await connectMockAccount({ workspaceId: workspace.id, platform: "tiktok", userId: user.id });
     const [job] = await db
-      .insert(publishJobs)
-      .values({ workspaceId: workspace.id, videoId: video.id, accountId: tiktok.id, platform: "tiktok", mode: "direct", status: "succeeded", externalId: "v_1" })
+      .insert(publishAttempts)
+      .values({
+        workspaceId: workspace.id,
+        videoId: video.id,
+        connectionId: tiktok.id,
+        platform: "tiktok",
+        mode: "direct",
+        status: "published",
+        externalPostId: "v_1",
+        completedAt: new Date(),
+      })
       .returning();
     await expect(startHandoff({ workspaceId: workspace.id, videoId: video.id, kind: "tiktok_spark", creatorHandle: "bad handle!", actor: user.id })).rejects.toThrow(
       /creator's handle/,
@@ -244,7 +264,7 @@ describe("ad hand-offs and creator briefs", () => {
   it("saves a creator brief with proven hooks and keeps it inside the workspace", async () => {
     const { workspace, user, video } = await setup("cb-save");
     const other = await setup("cb-other");
-    await addTile({ workspaceId: workspace.id, kind: "hook", title: "POV: you finally found Oat-milk cold brew.", score: 30 });
+    await addTile({ workspaceId: workspace.id, kind: "hook_result", title: "POV: you finally found Oat-milk cold brew.", score: 30 });
     const brief = await saveCreatorBrief({
       workspaceId: workspace.id,
       brand: workspace.brief,

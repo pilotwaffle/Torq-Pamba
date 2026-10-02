@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { and, asc, desc, eq, lte, ne } from "drizzle-orm";
 import { getDb } from "@/db";
-import { publishJobs, scheduleItems, videos, workspaces, type PublishTarget } from "@/db/schema";
+import { publishAttempts, scheduleItems, videos, workspaces, type PublishTarget } from "@/db/schema";
 import { writeAudit } from "@/lib/audit";
 import { allowsInsecureLocalEndpoints } from "@/lib/local-mode";
 import { AccountError, validateTargets } from "@/lib/publish/accounts";
@@ -232,9 +232,9 @@ export async function cancel(scheduleItemId: string, actor = "user", workspaceId
     .where(eq(scheduleItems.id, item.id));
   // Jobs not yet picked up are canceled too. Anything already sent stays in the publish log.
   await db
-    .update(publishJobs)
-    .set({ status: "canceled", updatedAt: new Date() })
-    .where(and(eq(publishJobs.scheduleItemId, item.id), eq(publishJobs.status, "queued")));
+    .update(publishAttempts)
+    .set({ status: "canceled", completedAt: new Date() })
+    .where(and(eq(publishAttempts.scheduleItemId, item.id), eq(publishAttempts.status, "pending")));
 
   const [other] = await db
     .select({ id: scheduleItems.id })

@@ -21,8 +21,8 @@ export function ApiKeyForm({ disabled }: { disabled: boolean }) {
           </select>
         </label>
         <label className="text-sm">
-          <span className="mb-1 block font-medium">Monthly spending cap (USD)</span>
-          <input name="spendCapUsd" type="number" min="0" step="0.01" className={fieldClass} aria-label="Monthly spending cap (USD)" placeholder="No cap" />
+          <span className="mb-1 block font-medium">Monthly credit ceiling ($0.01 per credit)</span>
+          <input name="maxCredits" type="number" min="0" step="1" className={fieldClass} aria-label="Monthly credit ceiling" placeholder="No ceiling" />
         </label>
         <div className="sm:col-span-4">
           <button type="submit" className={primaryButton} disabled={disabled || pending}>

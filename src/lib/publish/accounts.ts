@@ -1,10 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { getDb } from "@/db";
-import { socialAccounts, type PublishTarget, type SocialAccount } from "@/db/schema";
+import { publishingConnections, type PublishTarget, type PublishingConnection } from "@/db/schema";
 import { writeAudit } from "@/lib/audit";
-import { isPublishLive, isValidMode, PLATFORM_LABEL, type Platform } from "./config";
-import { openToken, sealToken } from "./crypto";
+import { isPlatform, isPublishLive, isValidMode, PLATFORM_LABEL, type Platform } from "./config";
+import { openToken, sealToken, TOKEN_KEY_VERSION } from "./crypto";
 import { exchangeFacebookCode } from "./live/facebook";
 import { exchangeInstagramCode } from "./live/instagram";
 import { exchangeTikTokCode } from "./live/tiktok";
@@ -17,36 +17,53 @@ export class AccountError extends Error {
   }
 }
 
+/** Accounts live in the foundation's `publishing_connections`. The display name is the handle. */
+export function handleOf(connection: Pick<PublishingConnection, "displayName" | "externalAccountId">): string {
+  return connection.displayName ?? connection.externalAccountId;
+}
+
+/** Active connections this phase can publish to (a reserved `youtube` row is skipped). */
 export async function listAccounts(workspaceId: string) {
   const db = await getDb();
-  return db
+  const rows = await db
     .select({
-      id: socialAccounts.id,
-      platform: socialAccounts.platform,
-      handle: socialAccounts.handle,
-      mode: socialAccounts.mode,
-      createdAt: socialAccounts.createdAt,
-      expiresAt: socialAccounts.expiresAt,
+      id: publishingConnections.id,
+      platform: publishingConnections.platform,
+      displayName: publishingConnections.displayName,
+      externalAccountId: publishingConnections.externalAccountId,
+      mode: publishingConnections.mode,
+      createdAt: publishingConnections.createdAt,
+      expiresAt: publishingConnections.tokenExpiresAt,
     })
-    .from(socialAccounts)
-    .where(and(eq(socialAccounts.workspaceId, workspaceId), isNull(socialAccounts.revokedAt)))
-    .orderBy(asc(socialAccounts.createdAt));
+    .from(publishingConnections)
+    .where(and(eq(publishingConnections.workspaceId, workspaceId), isNull(publishingConnections.revokedAt)))
+    .orderBy(asc(publishingConnections.createdAt));
+  return rows.flatMap(({ platform, displayName, externalAccountId, ...row }) =>
+    isPlatform(platform) ? [{ ...row, platform, handle: handleOf({ displayName, externalAccountId }) }] : [],
+  );
+}
+
+/** `granted.scopes` arrives as the platform's comma- or space-separated string. */
+function scopeList(value: string): string[] {
+  return value.split(/[\s,]+/).filter(Boolean);
 }
 
 /** Mock connection for demos and tests. It never reaches a platform. */
 export async function connectMockAccount(input: { workspaceId: string; platform: Platform; userId?: string | null; handle?: string }) {
   const db = await getDb();
   const [row] = await db
-    .insert(socialAccounts)
+    .insert(publishingConnections)
     .values({
       workspaceId: input.workspaceId,
       platform: input.platform,
-      externalId: `mock-${randomBytes(6).toString("hex")}`,
-      handle: input.handle ?? `@mock-${input.platform}`,
+      externalAccountId: `mock-${randomBytes(6).toString("hex")}`,
+      displayName: input.handle ?? `@mock-${input.platform}`,
       mode: "mock",
       // Mock accounts hold no credential, so nothing needs sealing.
-      accessTokenEnc: MOCK_TOKEN_MARKER,
-      scopes: "mock",
+      accessTokenCiphertext: MOCK_TOKEN_MARKER,
+      tokenKeyVersion: TOKEN_KEY_VERSION,
+      scopes: ["mock"],
+      status: "active",
       connectedBy: input.userId ?? null,
     })
     .returning();
@@ -63,10 +80,22 @@ export async function connectMockAccount(input: { workspaceId: string; platform:
 export async function disconnectAccount(workspaceId: string, accountId: string, actor = "user") {
   const db = await getDb();
   const [row] = await db
-    .update(socialAccounts)
-    .set({ revokedAt: new Date(), accessTokenEnc: REVOKED_TOKEN_MARKER, refreshTokenEnc: null })
-    .where(and(eq(socialAccounts.id, accountId), eq(socialAccounts.workspaceId, workspaceId), isNull(socialAccounts.revokedAt)))
-    .returning({ id: socialAccounts.id, platform: socialAccounts.platform });
+    .update(publishingConnections)
+    .set({
+      revokedAt: new Date(),
+      status: "revoked",
+      accessTokenCiphertext: REVOKED_TOKEN_MARKER,
+      refreshTokenCiphertext: null,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(publishingConnections.id, accountId),
+        eq(publishingConnections.workspaceId, workspaceId),
+        isNull(publishingConnections.revokedAt),
+      ),
+    )
+    .returning({ id: publishingConnections.id, platform: publishingConnections.platform });
   if (!row) throw new AccountError("Account not found");
   await writeAudit({ workspaceId, actor, action: "account.disconnected", data: { accountId: row.id, platform: row.platform } });
 }
@@ -74,10 +103,13 @@ export async function disconnectAccount(workspaceId: string, accountId: string, 
 export const MOCK_TOKEN_MARKER = "mock:no-credential";
 export const REVOKED_TOKEN_MARKER = "revoked";
 
-export function accessTokenOf(account: Pick<SocialAccount, "accessTokenEnc">): string {
-  if (account.accessTokenEnc === MOCK_TOKEN_MARKER) return "";
-  if (account.accessTokenEnc === REVOKED_TOKEN_MARKER) throw new AccountError("This account was disconnected");
-  return openToken(account.accessTokenEnc);
+export function accessTokenOf(account: Pick<PublishingConnection, "accessTokenCiphertext" | "tokenKeyVersion">): string {
+  if (account.accessTokenCiphertext === MOCK_TOKEN_MARKER) return "";
+  if (account.accessTokenCiphertext === REVOKED_TOKEN_MARKER) throw new AccountError("This account was disconnected");
+  if (account.tokenKeyVersion !== TOKEN_KEY_VERSION) {
+    throw new AccountError("This account's token was sealed with a retired key. Reconnect the account.");
+  }
+  return openToken(account.accessTokenCiphertext);
 }
 
 /** Every target must be an active account of this workspace with a mode valid for its platform. */
@@ -122,30 +154,34 @@ export async function completeOAuth(
   const values = {
     workspaceId: input.workspaceId,
     platform,
-    externalId: granted.externalId,
-    handle: granted.handle,
+    externalAccountId: granted.externalId,
+    displayName: granted.handle,
     mode: "live",
-    accessTokenEnc: sealToken(granted.accessToken),
-    refreshTokenEnc: granted.refreshToken ? sealToken(granted.refreshToken) : null,
-    scopes: granted.scopes,
-    expiresAt: granted.expiresAt,
+    accessTokenCiphertext: sealToken(granted.accessToken),
+    refreshTokenCiphertext: granted.refreshToken ? sealToken(granted.refreshToken) : null,
+    tokenKeyVersion: TOKEN_KEY_VERSION,
+    scopes: scopeList(granted.scopes),
+    tokenExpiresAt: granted.expiresAt,
+    status: "active" as const,
+    lastError: null,
     connectedBy: input.userId,
     revokedAt: null,
+    updatedAt: new Date(),
   };
   const [existing] = await db
-    .select({ id: socialAccounts.id })
-    .from(socialAccounts)
+    .select({ id: publishingConnections.id })
+    .from(publishingConnections)
     .where(
       and(
-        eq(socialAccounts.workspaceId, input.workspaceId),
-        eq(socialAccounts.platform, platform),
-        eq(socialAccounts.externalId, granted.externalId),
+        eq(publishingConnections.workspaceId, input.workspaceId),
+        eq(publishingConnections.platform, platform),
+        eq(publishingConnections.externalAccountId, granted.externalId),
       ),
     )
     .limit(1);
   const [row] = existing
-    ? await db.update(socialAccounts).set(values).where(eq(socialAccounts.id, existing.id)).returning()
-    : await db.insert(socialAccounts).values(values).returning();
+    ? await db.update(publishingConnections).set(values).where(eq(publishingConnections.id, existing.id)).returning()
+    : await db.insert(publishingConnections).values(values).returning();
   if (!row) throw new AccountError("Could not save the account");
   await writeAudit({
     workspaceId: input.workspaceId,

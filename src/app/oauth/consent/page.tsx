@@ -55,8 +55,8 @@ export default async function ConsentPage({ searchParams }: { searchParams: Prom
                       Allow generating videos{!canWrite ? " (owner or admin only)" : ""}
                     </label>
                     <label className="block text-sm">
-                      <span className="mb-1 block font-medium">Monthly spending cap for this app (USD)</span>
-                      <input name="spendCapUsd" type="number" min="0" step="0.01" defaultValue="10" className={fieldClass} aria-label="Monthly spending cap for this app (USD)" />
+                      <span className="mb-1 block font-medium">Monthly credit ceiling for this app (credits, $0.01 each)</span>
+                      <input name="maxCredits" type="number" min="0" step="1" defaultValue="1000" className={fieldClass} aria-label="Monthly credit ceiling for this app" />
                     </label>
                   </>
                 ) : null}

@@ -57,7 +57,7 @@ export default async function ApiSettingsPage({ searchParams }: { searchParams: 
                 <th scope="col" className="px-4 py-3 font-medium">Name</th>
                 <th scope="col" className="px-4 py-3 font-medium">Key</th>
                 <th scope="col" className="px-4 py-3 font-medium">Access</th>
-                <th scope="col" className="px-4 py-3 font-medium">Spent / cap this month</th>
+                <th scope="col" className="px-4 py-3 font-medium">Credits used / ceiling this month</th>
                 <th scope="col" className="px-4 py-3 font-medium">Status</th>
                 <th scope="col" className="px-4 py-3 font-medium">Actions</th>
               </tr>
@@ -69,7 +69,7 @@ export default async function ApiSettingsPage({ searchParams }: { searchParams: 
                   <td className="px-4 py-3 font-mono text-xs">{row.prefix}…</td>
                   <td className="px-4 py-3">{row.scope === "write" ? "Read and generate" : "Read only"}</td>
                   <td className="px-4 py-3">
-                    {usd.format(row.spentUsd)} / {row.spendCapUsd === null ? "workspace budget" : usd.format(row.spendCapUsd)}
+                    {row.spentCredits.toLocaleString("en-US")} / {row.maxCredits === null ? "workspace budget" : row.maxCredits.toLocaleString("en-US")} ({usd.format(row.spentUsd)})
                   </td>
                   <td className="px-4 py-3">{row.revokedAt ? "Revoked" : "Active"}</td>
                   <td className="px-4 py-3">

@@ -12,7 +12,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { scheduleItems, users, videos, workspaces } from "./core";
-import { connectionStatus, publishJobStatus, publishStatus, socialPlatform } from "./enums";
+import { connectionStatus, publishStatus, socialPlatform } from "./enums";
 import { videoRenders } from "./media";
 
 // Wave 2: official-API publishing only (TikTok Content Posting, Instagram
@@ -35,6 +35,12 @@ export const publishingConnections = pgTable(
     /** Which encryption key version produced the ciphertext, for key rotation. */
     tokenKeyVersion: integer("token_key_version").notNull().default(1),
     tokenExpiresAt: timestamp("token_expires_at", { withTimezone: true }),
+    /**
+     * Added in 0005 (phase 2 port). "live" came from official OAuth; "mock" is a
+     * demo/test connection that never reaches a platform. Defaults to "mock" so a
+     * row written without a mode can never publish.
+     */
+    mode: text("mode").notNull().default("mock"),
     status: connectionStatus("status").notNull().default("active"),
     lastError: text("last_error"),
     connectedBy: uuid("connected_by").references(() => users.id, { onDelete: "set null" }),
@@ -68,6 +74,10 @@ export const publishAttempts = pgTable(
     status: publishStatus("status").notNull().default("pending"),
     /** Sent as the platform's AI-generated flag (TikTok `is_aigc`, IG `is_ai_generated`). */
     aiDisclosure: boolean("ai_disclosure").notNull().default(true),
+    /** Added in 0005. Publish mode: TikTok direct | draft; Instagram reel | trial_reel (Trial Reel); Facebook reel. */
+    mode: text("mode").notNull().default(""),
+    /** Added in 0005. Privacy actually sent (e.g. SELF_ONLY, DRAFT, TRIAL_NON_FOLLOWERS, PUBLIC). */
+    privacy: text("privacy").notNull().default(""),
     attempt: integer("attempt").notNull().default(1),
     externalPostId: text("external_post_id"),
     externalUrl: text("external_url"),
@@ -105,6 +115,8 @@ export const postAnalyticsSnapshots = pgTable(
     watchTimeMs: bigint("watch_time_ms", { mode: "number" }),
     avgWatchPct: numeric("avg_watch_pct", { precision: 5, scale: 2, mode: "number" }),
     followersGained: integer("followers_gained"),
+    /** Added in 0005. Accounts reached (Instagram/Facebook insights; TikTok reports none). */
+    reach: bigint("reach", { mode: "number" }),
     data: jsonb("data").$type<Record<string, unknown>>(),
   },
   (table) => [
@@ -114,77 +126,20 @@ export const postAnalyticsSnapshots = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// Phase 2 publishing (ported from feat/phase2-plus). These tables back the
-// implemented TikTok / Instagram / Facebook publish queue. They predate the
-// wave-0 placeholders above (publishing_connections, publish_attempts,
-// post_analytics_snapshots), which stay untouched; consolidating the two is an
-// owner decision recorded in REPORT.md.
+// Phase 2 publish log (ported from feat/phase2-plus). Connections, attempts and
+// metrics live in the foundation tables above (0005 added the missing columns);
+// this append-only status log has no foundation counterpart.
 // ---------------------------------------------------------------------------
-
-/** Phase 2 publishes to these three only; the shared enum also reserves `youtube`. */
-type PhasePlatform = "tiktok" | "instagram" | "facebook";
-
-export const socialAccounts = pgTable(
-  "social_accounts",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    workspaceId: uuid("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
-    platform: socialPlatform("platform").$type<PhasePlatform>().notNull(),
-    externalId: text("external_id").notNull(),
-    handle: text("handle").notNull(),
-    /** "mock" accounts never reach a platform. "live" accounts came from official OAuth. */
-    mode: text("mode").notNull().default("mock"),
-    accessTokenEnc: text("access_token_enc").notNull(),
-    refreshTokenEnc: text("refresh_token_enc"),
-    scopes: text("scopes").notNull().default(""),
-    expiresAt: timestamp("expires_at", { withTimezone: true }),
-    connectedBy: uuid("connected_by").references(() => users.id, { onDelete: "set null" }),
-    revokedAt: timestamp("revoked_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [index("social_accounts_workspace_idx").on(table.workspaceId)],
-);
-
-export const publishJobs = pgTable(
-  "publish_jobs",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    workspaceId: uuid("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
-    videoId: uuid("video_id")
-      .notNull()
-      .references(() => videos.id, { onDelete: "cascade" }),
-    scheduleItemId: uuid("schedule_item_id").references(() => scheduleItems.id, { onDelete: "set null" }),
-    accountId: uuid("account_id")
-      .notNull()
-      .references(() => socialAccounts.id, { onDelete: "cascade" }),
-    platform: socialPlatform("platform").$type<PhasePlatform>().notNull(),
-    mode: text("mode").notNull(),
-    status: publishJobStatus("status").notNull().default("queued"),
-    privacy: text("privacy").notNull().default(""),
-    externalId: text("external_id"),
-    attempts: integer("attempts").notNull().default(0),
-    lastError: text("last_error"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [
-    index("publish_jobs_status_idx").on(table.status),
-    index("publish_jobs_workspace_idx").on(table.workspaceId, table.createdAt),
-  ],
-);
 
 /** Append-only publish status log, one row per state change or platform status poll. */
 export const publishEvents = pgTable(
   "publish_events",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    /** The publish attempt this event belongs to (column name kept from 0002). */
     jobId: uuid("job_id")
       .notNull()
-      .references(() => publishJobs.id, { onDelete: "cascade" }),
+      .references(() => publishAttempts.id, { onDelete: "cascade" }),
     workspaceId: uuid("workspace_id")
       .notNull()
       .references(() => workspaces.id, { onDelete: "cascade" }),
@@ -193,26 +148,4 @@ export const publishEvents = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index("publish_events_job_idx").on(table.jobId, table.createdAt)],
-);
-
-export const postMetrics = pgTable(
-  "post_metrics",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    workspaceId: uuid("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
-    jobId: uuid("job_id")
-      .notNull()
-      .references(() => publishJobs.id, { onDelete: "cascade" }),
-    platform: socialPlatform("platform").$type<PhasePlatform>().notNull(),
-    views: integer("views").notNull().default(0),
-    likes: integer("likes").notNull().default(0),
-    comments: integer("comments").notNull().default(0),
-    shares: integer("shares").notNull().default(0),
-    saves: integer("saves").notNull().default(0),
-    reach: integer("reach").notNull().default(0),
-    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [index("post_metrics_job_idx").on(table.jobId, table.fetchedAt)],
 );

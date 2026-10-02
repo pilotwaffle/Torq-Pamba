@@ -12,8 +12,9 @@ function text(formData: FormData, name: string): string {
   return typeof value === "string" ? value : "";
 }
 
-function capFrom(formData: FormData): number | null {
-  const raw = text(formData, "spendCapUsd").trim();
+/** The monthly credit ceiling field (`api_keys.max_credits`). Blank = workspace budget only. */
+function ceilingFrom(formData: FormData): number | null {
+  const raw = text(formData, "maxCredits").trim();
   return raw ? Number(raw) : null;
 }
 
@@ -32,7 +33,7 @@ export async function createApiKeyAction(
   const { user, workspace } = await requireManager("/app/settings/api");
   try {
     const scope: Scope = text(formData, "scope") === "write" ? "write" : "read";
-    const created = await createApiKey({ workspaceId: workspace.id, name: text(formData, "name"), scope, spendCapUsd: capFrom(formData), actor: user.id });
+    const created = await createApiKey({ workspaceId: workspace.id, name: text(formData, "name"), scope, maxCredits: ceilingFrom(formData), actor: user.id });
     return { key: created.key, prefix: created.credential.prefix };
   } catch (error) {
     return { error: error instanceof CredentialError ? error.message : "Could not create the key" };
@@ -71,7 +72,7 @@ export async function approveOAuthAction(formData: FormData) {
       workspaceId: workspace.id,
       userId: user.id,
       scope,
-      spendCapUsd: scope === "write" ? capFrom(formData) : null,
+      maxCredits: scope === "write" ? ceilingFrom(formData) : null,
     });
     target = redirectWith(request.redirectUri, { code, state: request.state });
   } catch (error) {

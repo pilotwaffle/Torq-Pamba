@@ -1,39 +1,80 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { and, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { apiCredentials, apiRequests, type ApiCredential } from "@/db/schema";
+import { apiKeys, apiRequests, type ApiKey } from "@/db/schema";
 import { writeAudit } from "@/lib/audit";
 import { roundCents } from "@/lib/pricing";
 
 /**
- * Machine credentials for the REST API and the MCP server. Secrets are random
- * 256-bit values shown once; only their SHA-256 hash is stored (they are high
- * entropy, so a slow hash adds nothing). Prefixes make leaked keys greppable:
+ * Machine credentials for the REST API and the MCP server, stored in the
+ * foundation's `api_keys`. Secrets are random 256-bit values shown once; only
+ * their SHA-256 hash is stored (they are high entropy, so a slow hash adds
+ * nothing), plus a display prefix. Prefixes make leaked keys greppable:
  * tpk_ = workspace API key, tpa_ = OAuth access token, tpr_ = OAuth refresh token.
+ *
+ * Scope is stored as `scopes` plus the `read_only` flag; the monthly spending
+ * ceiling is `max_credits`, counted per grant (a key is its own grant; an
+ * OAuth grant's rotating tokens share `grant_id`).
  */
 
 export type Scope = "read" | "write";
+export type CredentialKind = ApiKey["kind"];
 export type Principal = {
   credentialId: string;
   workspaceId: string;
   grantId: string;
   scope: Scope;
-  kind: ApiCredential["kind"];
-  spendCapUsd: number | null;
+  kind: CredentialKind;
+  /** Monthly credit ceiling for this key or grant. Null = workspace budget only. */
+  maxCredits: number | null;
   clientId: string | null;
 };
+
+/**
+ * $0.01 per credit, the rate feat/v2-credits uses. This base has no credit
+ * ledger yet, so a generation through the API counts its USD cost at this rate
+ * against `api_keys.max_credits`. Switch to the ledger's charged credits when
+ * the credits branch lands.
+ */
+export const USD_PER_CREDIT = 0.01;
+export const MAX_CREDIT_CEILING = 10_000_000;
+
+export function creditsForUsd(usd: number): number {
+  if (!Number.isFinite(usd) || usd <= 0) return 0;
+  return Math.ceil(Number((usd / USD_PER_CREDIT).toFixed(6)));
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** `api_keys.created_by` references users; system actors are kept in the audit log only. */
+function creatorOf(actor: string): string | null {
+  return UUID.test(actor) ? actor : null;
+}
+
+export function scopesFor(scope: Scope): { scopes: string[]; readOnly: boolean } {
+  return scope === "write" ? { scopes: ["read", "write"], readOnly: false } : { scopes: ["read"], readOnly: true };
+}
+
+/** Fails closed: anything but an explicit, non-read-only write scope is read. */
+export function scopeOf(row: Pick<ApiKey, "scopes" | "readOnly">): Scope {
+  return !row.readOnly && row.scopes.includes("write") ? "write" : "read";
+}
+
+export function grantOf(row: Pick<ApiKey, "id" | "grantId">): string {
+  return row.grantId ?? row.id;
+}
 
 export const ACCESS_TOKEN_TTL_S = 3600;
 export const REFRESH_TOKEN_TTL_S = 30 * 24 * 3600;
 export const RATE_LIMIT_PER_MINUTE = 120;
 
-const PREFIX: Record<ApiCredential["kind"], string> = { key: "tpk", oauth_access: "tpa", oauth_refresh: "tpr" };
+const PREFIX: Record<CredentialKind, string> = { key: "tpk", oauth_access: "tpa", oauth_refresh: "tpr" };
 
 export function hashSecret(secret: string): string {
   return createHash("sha256").update(secret, "utf8").digest("hex");
 }
 
-export function mintSecret(kind: ApiCredential["kind"]): { secret: string; prefix: string } {
+export function mintSecret(kind: CredentialKind): { secret: string; prefix: string } {
   const prefix = randomBytes(4).toString("hex");
   return { secret: `${PREFIX[kind]}_${prefix}_${randomBytes(32).toString("base64url")}`, prefix: `${PREFIX[kind]}_${prefix}` };
 }
@@ -42,10 +83,12 @@ export function looksLikeSecret(value: string): boolean {
   return /^tp[kar]_[0-9a-f]{8}_[A-Za-z0-9_-]{43}$/.test(value);
 }
 
-export function validateCap(value: number | null | undefined): number | null {
+export function validateCeiling(value: number | null | undefined): number | null {
   if (value === null || value === undefined || Number.isNaN(value)) return null;
-  if (!Number.isFinite(value) || value < 0 || value > 100_000) throw new CredentialError("Spending cap must be between $0 and $100,000");
-  return roundCents(value);
+  if (!Number.isInteger(value) || value < 0 || value > MAX_CREDIT_CEILING) {
+    throw new CredentialError(`Credit ceiling must be a whole number from 0 to ${MAX_CREDIT_CEILING.toLocaleString("en-US")}`);
+  }
+  return value;
 }
 
 export class CredentialError extends Error {
@@ -59,28 +102,28 @@ export async function createApiKey(input: {
   workspaceId: string;
   name: string;
   scope: Scope;
-  spendCapUsd?: number | null;
+  maxCredits?: number | null;
   actor: string;
-}): Promise<{ key: string; credential: ApiCredential }> {
+}): Promise<{ key: string; credential: ApiKey & { grantId: string } }> {
   const name = input.name.trim();
   if (!name || name.length > 60) throw new CredentialError("Name the key (1-60 characters)");
-  const cap = validateCap(input.spendCapUsd);
+  const ceiling = validateCeiling(input.maxCredits);
   const { secret, prefix } = mintSecret("key");
   const id = randomUUID();
   const db = await getDb();
   const [row] = await db
-    .insert(apiCredentials)
+    .insert(apiKeys)
     .values({
       id,
       workspaceId: input.workspaceId,
       kind: "key",
       name,
       prefix,
-      secretHash: hashSecret(secret),
-      scope: input.scope,
+      keyHash: hashSecret(secret),
+      ...scopesFor(input.scope),
       grantId: id,
-      spendCapUsd: cap,
-      createdBy: input.actor,
+      maxCredits: ceiling,
+      createdBy: creatorOf(input.actor),
     })
     .returning();
   if (!row) throw new CredentialError("Could not create the key");
@@ -88,9 +131,9 @@ export async function createApiKey(input: {
     workspaceId: input.workspaceId,
     actor: input.actor,
     action: "api_key.created",
-    data: { credentialId: row.id, prefix, scope: input.scope, spendCapUsd: cap },
+    data: { credentialId: row.id, prefix, scope: input.scope, maxCredits: ceiling },
   });
-  return { key: secret, credential: row };
+  return { key: secret, credential: { ...row, grantId: grantOf(row) } };
 }
 
 export async function issueOAuthTokens(input: {
@@ -99,7 +142,7 @@ export async function issueOAuthTokens(input: {
   /** Shown on the settings page; defaults to the client id. */
   name?: string;
   scope: Scope;
-  spendCapUsd: number | null;
+  maxCredits: number | null;
   grantId?: string;
   actor: string;
   now?: Date;
@@ -112,52 +155,52 @@ export async function issueOAuthTokens(input: {
   const base = {
     workspaceId: input.workspaceId,
     name: input.name ?? `OAuth: ${input.clientId}`,
-    scope: input.scope,
+    ...scopesFor(input.scope),
     grantId,
     clientId: input.clientId,
-    spendCapUsd: input.spendCapUsd,
-    createdBy: input.actor,
+    maxCredits: validateCeiling(input.maxCredits),
+    createdBy: creatorOf(input.actor),
   };
-  await db.insert(apiCredentials).values([
+  await db.insert(apiKeys).values([
     {
       ...base,
       kind: "oauth_access",
       prefix: access.prefix,
-      secretHash: hashSecret(access.secret),
+      keyHash: hashSecret(access.secret),
       expiresAt: new Date(now.getTime() + ACCESS_TOKEN_TTL_S * 1000),
     },
     {
       ...base,
       kind: "oauth_refresh",
       prefix: refresh.prefix,
-      secretHash: hashSecret(refresh.secret),
+      keyHash: hashSecret(refresh.secret),
       expiresAt: new Date(now.getTime() + REFRESH_TOKEN_TTL_S * 1000),
     },
   ]);
   return { accessToken: access.secret, refreshToken: refresh.secret, expiresIn: ACCESS_TOKEN_TTL_S, grantId };
 }
 
-async function findActive(secret: string, kinds: ApiCredential["kind"][], now: Date): Promise<ApiCredential | null> {
+async function findActive(secret: string, kinds: CredentialKind[], now: Date): Promise<ApiKey | null> {
   if (!looksLikeSecret(secret)) return null;
   const db = await getDb();
   const [row] = await db
     .select()
-    .from(apiCredentials)
-    .where(and(eq(apiCredentials.secretHash, hashSecret(secret)), inArray(apiCredentials.kind, kinds), isNull(apiCredentials.revokedAt)))
+    .from(apiKeys)
+    .where(and(eq(apiKeys.keyHash, hashSecret(secret)), inArray(apiKeys.kind, kinds), isNull(apiKeys.revokedAt)))
     .limit(1);
   if (!row) return null;
   if (row.expiresAt && row.expiresAt.getTime() <= now.getTime()) return null;
   return row;
 }
 
-function principalOf(row: ApiCredential): Principal {
+function principalOf(row: ApiKey): Principal {
   return {
     credentialId: row.id,
     workspaceId: row.workspaceId,
-    grantId: row.grantId,
-    scope: row.scope,
+    grantId: grantOf(row),
+    scope: scopeOf(row),
     kind: row.kind,
-    spendCapUsd: row.spendCapUsd === null ? null : Number(row.spendCapUsd),
+    maxCredits: row.maxCredits,
     clientId: row.clientId,
   };
 }
@@ -167,7 +210,7 @@ export async function authenticate(secret: string, now = new Date()): Promise<Pr
   const row = await findActive(secret.trim(), ["key", "oauth_access"], now);
   if (!row) return null;
   const db = await getDb();
-  await db.update(apiCredentials).set({ lastUsedAt: now }).where(eq(apiCredentials.id, row.id));
+  await db.update(apiKeys).set({ lastUsedAt: now }).where(eq(apiKeys.id, row.id));
   return principalOf(row);
 }
 
@@ -176,19 +219,20 @@ export async function rotateRefreshToken(input: { refreshToken: string; clientId
   const now = input.now ?? new Date();
   const row = await findActive(input.refreshToken.trim(), ["oauth_refresh"], now);
   if (!row || row.clientId !== input.clientId) return null;
+  const grantId = grantOf(row);
   const db = await getDb();
   await db
-    .update(apiCredentials)
+    .update(apiKeys)
     .set({ revokedAt: now })
-    .where(and(eq(apiCredentials.grantId, row.grantId), isNull(apiCredentials.revokedAt)));
+    .where(and(or(eq(apiKeys.id, grantId), eq(apiKeys.grantId, grantId)), isNull(apiKeys.revokedAt)));
   return issueOAuthTokens({
     workspaceId: row.workspaceId,
     clientId: input.clientId,
     name: row.name,
-    scope: row.scope,
-    spendCapUsd: row.spendCapUsd === null ? null : Number(row.spendCapUsd),
-    grantId: row.grantId,
-    actor: row.createdBy,
+    scope: scopeOf(row),
+    maxCredits: row.maxCredits,
+    grantId,
+    actor: row.createdBy ?? "oauth",
     now,
   });
 }
@@ -205,15 +249,16 @@ export async function revokeGrant(workspaceId: string, credentialId: string, act
   const db = await getDb();
   const [row] = await db
     .select()
-    .from(apiCredentials)
-    .where(and(eq(apiCredentials.id, credentialId), eq(apiCredentials.workspaceId, workspaceId)))
+    .from(apiKeys)
+    .where(and(eq(apiKeys.id, credentialId), eq(apiKeys.workspaceId, workspaceId)))
     .limit(1);
   if (!row) throw new CredentialError("Key not found");
+  const grantId = grantOf(row);
   await db
-    .update(apiCredentials)
+    .update(apiKeys)
     .set({ revokedAt: new Date() })
-    .where(and(eq(apiCredentials.grantId, row.grantId), isNull(apiCredentials.revokedAt)));
-  await writeAudit({ workspaceId, actor, action: "api_key.revoked", data: { credentialId, grantId: row.grantId } });
+    .where(and(eq(apiKeys.workspaceId, workspaceId), or(eq(apiKeys.id, grantId), eq(apiKeys.grantId, grantId)), isNull(apiKeys.revokedAt)));
+  await writeAudit({ workspaceId, actor, action: "api_key.revoked", data: { credentialId, grantId } });
 }
 
 function monthStartUtc(now: Date): Date {
@@ -227,6 +272,16 @@ export async function grantSpendUsd(grantId: string, now = new Date()): Promise<
     .from(apiRequests)
     .where(and(eq(apiRequests.grantId, grantId), gte(apiRequests.createdAt, monthStartUtc(now))));
   return roundCents(Number(row?.total ?? 0));
+}
+
+/** Credits used this calendar month (UTC) by one key or OAuth grant: what `max_credits` caps. */
+export async function grantSpendCredits(grantId: string, now = new Date()): Promise<number> {
+  const db = await getDb();
+  const [row] = await db
+    .select({ total: sql<string>`coalesce(sum(${apiRequests.credits}), 0)` })
+    .from(apiRequests)
+    .where(and(eq(apiRequests.grantId, grantId), gte(apiRequests.createdAt, monthStartUtc(now))));
+  return Number(row?.total ?? 0);
 }
 
 export async function recordRequest(input: {
@@ -244,6 +299,7 @@ export async function recordRequest(input: {
     operation: input.operation.slice(0, 80),
     status: input.status,
     costUsd: input.costUsd ?? 0,
+    credits: creditsForUsd(input.costUsd ?? 0),
   });
 }
 
@@ -261,21 +317,22 @@ export async function listCredentials(workspaceId: string) {
   const db = await getDb();
   const rows = await db
     .select()
-    .from(apiCredentials)
-    .where(and(eq(apiCredentials.workspaceId, workspaceId), inArray(apiCredentials.kind, ["key", "oauth_access"])))
-    .orderBy(desc(apiCredentials.createdAt));
-  const byGrant = new Map<string, ApiCredential>();
-  for (const row of rows) if (!byGrant.has(row.grantId)) byGrant.set(row.grantId, row);
+    .from(apiKeys)
+    .where(and(eq(apiKeys.workspaceId, workspaceId), inArray(apiKeys.kind, ["key", "oauth_access"])))
+    .orderBy(desc(apiKeys.createdAt));
+  const byGrant = new Map<string, ApiKey>();
+  for (const row of rows) if (!byGrant.has(grantOf(row))) byGrant.set(grantOf(row), row);
   const out = [];
-  for (const row of byGrant.values()) {
+  for (const [grantId, row] of byGrant) {
     out.push({
       id: row.id,
       kind: row.kind,
       name: row.name,
       prefix: row.prefix,
-      scope: row.scope,
-      spendCapUsd: row.spendCapUsd === null ? null : Number(row.spendCapUsd),
-      spentUsd: await grantSpendUsd(row.grantId),
+      scope: scopeOf(row),
+      maxCredits: row.maxCredits,
+      spentCredits: await grantSpendCredits(grantId),
+      spentUsd: await grantSpendUsd(grantId),
       lastUsedAt: row.lastUsedAt,
       revokedAt: row.revokedAt,
       createdAt: row.createdAt,

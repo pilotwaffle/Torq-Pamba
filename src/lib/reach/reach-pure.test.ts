@@ -9,7 +9,7 @@ import { validateTile } from "./knowledge";
 const input = { product: "Oat-milk cold brew", audience: "Night-shift nurses", company: "Northwind" };
 
 function stat(label: string, views: number, rate: number, measured = true): VariantStats {
-  return { variantId: `v-${label}`, label, hook: `Hook ${label}`, pattern: "pov", videoId: `vid-${label}`, jobStatus: "succeeded", views, engagementRate: rate, measured };
+  return { variantId: `v-${label}`, label, hook: `Hook ${label}`, pattern: "pov", videoId: `vid-${label}`, jobStatus: "published", views, engagementRate: rate, measured };
 }
 
 const form: CreatorBriefInput = {
@@ -176,7 +176,8 @@ describe("hand-off and knowledge validation", () => {
   });
 
   it("validates knowledge tiles", () => {
-    expect(validateTile({ kind: "hook", title: "POV: cold brew", body: "" })).toEqual([]);
+    expect(validateTile({ kind: "hook_result", title: "POV: cold brew", body: "" })).toEqual([]);
+    expect(validateTile({ kind: "format", title: "Split-screen before/after", body: "" })).toEqual([]);
     expect(validateTile({ kind: "spell", title: "", body: "x".repeat(1001) })).toEqual([
       "Choose a tile type",
       "Title is required",

@@ -36,6 +36,20 @@
       "when": 1790920484272,
       "tag": "0004_phase4_platform",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790921584267,
+      "tag": "0005_consolidate_foundation",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790921590980,
+      "tag": "0006_drop_phase_duplicates",
+      "breakpoints": true
     }
   ]
 }

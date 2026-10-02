@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { POST as cronTick } from "@/app/api/cron/tick/route";
 import { getDb } from "@/db";
-import { auditLog, publishEvents, publishJobs, scheduleItems, socialAccounts, videos } from "@/db/schema";
+import { auditLog, publishAttempts, publishEvents, publishingConnections, scheduleItems, videos } from "@/db/schema";
 import { refreshMetrics, workspaceAnalytics } from "@/lib/analytics";
 import { signupAccount } from "@/lib/auth/account";
 import { cancel, processDueItems, reschedule, scheduleVideo } from "@/lib/schedule";
@@ -56,7 +56,8 @@ describe("publish flow (mock platforms)", () => {
     const { workspace, user, video, db } = await setup("flow");
     const tiktok = await connectMockAccount({ workspaceId: workspace.id, platform: "tiktok", userId: user.id });
     const instagram = await connectMockAccount({ workspaceId: workspace.id, platform: "instagram", userId: user.id });
-    expect(tiktok.accessTokenEnc).toBe(MOCK_TOKEN_MARKER);
+    expect(tiktok.accessTokenCiphertext).toBe(MOCK_TOKEN_MARKER);
+    expect(tiktok).toMatchObject({ mode: "mock", status: "active", tokenKeyVersion: 1, scopes: ["mock"] });
     expect(accessTokenOf(tiktok)).toBe("");
 
     const item = await scheduleVideo(video.id, new Date(Date.now() - 1_000), user.id, [
@@ -70,12 +71,14 @@ describe("publish flow (mock platforms)", () => {
 
     const result = await processPublishQueue({ workspaceId: workspace.id });
     expect(result).toEqual({ succeeded: 2, failed: 0 });
-    const jobs = await db.select().from(publishJobs).where(eq(publishJobs.videoId, video.id));
+    const jobs = await db.select().from(publishAttempts).where(eq(publishAttempts.videoId, video.id));
     const tiktokJob = jobs.find((job) => job.platform === "tiktok");
     const igJob = jobs.find((job) => job.platform === "instagram");
-    expect(tiktokJob).toMatchObject({ status: "succeeded", privacy: "SELF_ONLY", mode: "direct" });
-    expect(tiktokJob?.externalId).toMatch(/^mock_tiktok_/);
-    expect(igJob).toMatchObject({ status: "succeeded", privacy: "PUBLIC", mode: "reel" });
+    expect(tiktokJob).toMatchObject({ status: "published", privacy: "SELF_ONLY", mode: "direct", aiDisclosure: true, connectionId: tiktok.id });
+    expect(tiktokJob?.externalPostId).toMatch(/^mock_tiktok_/);
+    expect(tiktokJob?.submittedAt).toBeInstanceOf(Date);
+    expect(tiktokJob?.completedAt).toBeInstanceOf(Date);
+    expect(igJob).toMatchObject({ status: "published", privacy: "PUBLIC", mode: "reel", aiDisclosure: true });
 
     const events = await db.select().from(publishEvents).where(eq(publishEvents.jobId, tiktokJob!.id));
     expect(events.map((event) => event.status)).toEqual(["processing", "forced_private", "submitted", "succeeded"]);
@@ -94,7 +97,7 @@ describe("publish flow (mock platforms)", () => {
       { accountId: tiktok.id, mode: "direct" },
     ]);
     await processDueItems(new Date(), { workspaceId: workspace.id });
-    const queued = await db.select().from(publishJobs).where(eq(publishJobs.videoId, video.id));
+    const queued = await db.select().from(publishAttempts).where(eq(publishAttempts.videoId, video.id));
     const igJob = queued.find((job) => job.platform === "instagram")!;
     const ttJob = queued.find((job) => job.platform === "tiktok")!;
     const ig = await runPublishJob(igJob.id);
@@ -117,10 +120,10 @@ describe("publish flow (mock platforms)", () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
     const mock = await connectMockAccount({ workspaceId: workspace.id, platform: "tiktok", userId: user.id });
-    await db.update(socialAccounts).set({ mode: "live" }).where(eq(socialAccounts.id, mock.id));
+    await db.update(publishingConnections).set({ mode: "live" }).where(eq(publishingConnections.id, mock.id));
     await scheduleVideo(video.id, new Date(Date.now() - 1_000), user.id, [{ accountId: mock.id, mode: "direct" }]);
     await processDueItems(new Date(), { workspaceId: workspace.id });
-    const [job] = await db.select().from(publishJobs).where(eq(publishJobs.videoId, video.id));
+    const [job] = await db.select().from(publishAttempts).where(eq(publishAttempts.videoId, video.id));
     const result = await runPublishJob(job!.id);
     expect(result.status).toBe("failed");
     expect(result.error).toMatch(/PUBLISH_MODE is not live/);
@@ -138,7 +141,7 @@ describe("publish flow (mock platforms)", () => {
     const item = await scheduleVideo(video.id, new Date(Date.now() - 1_000), user.id, [{ accountId: tiktok.id, mode: "draft" }]);
     await processDueItems(new Date(), { workspaceId: workspace.id });
     await cancel(item.id, user.id);
-    const [canceledJob] = await db.select().from(publishJobs).where(eq(publishJobs.scheduleItemId, item.id));
+    const [canceledJob] = await db.select().from(publishAttempts).where(eq(publishAttempts.scheduleItemId, item.id));
     expect(canceledJob?.status).toBe("canceled");
 
     const second = await setup("disconnect");
@@ -147,13 +150,53 @@ describe("publish flow (mock platforms)", () => {
     await processDueItems(new Date(), { workspaceId: second.workspace.id });
     await disconnectAccount(second.workspace.id, acct.id);
     expect(await listAccounts(second.workspace.id)).toHaveLength(0);
-    const [revoked] = await db.select().from(socialAccounts).where(eq(socialAccounts.id, acct.id));
-    expect(revoked!.accessTokenEnc).toBe(REVOKED_TOKEN_MARKER);
-    expect(revoked!.refreshTokenEnc).toBeNull();
+    const [revoked] = await db.select().from(publishingConnections).where(eq(publishingConnections.id, acct.id));
+    expect(revoked!.accessTokenCiphertext).toBe(REVOKED_TOKEN_MARKER);
+    expect(revoked!.refreshTokenCiphertext).toBeNull();
+    expect(revoked!.status).toBe("revoked");
     expect(() => accessTokenOf(revoked!)).toThrow(/disconnected/);
     expect(await processPublishQueue({ workspaceId: second.workspace.id })).toEqual({ succeeded: 0, failed: 1 });
-    const [job] = await db.select().from(publishJobs).where(eq(publishJobs.accountId, acct.id));
-    expect(job?.lastError).toMatch(/disconnected/);
+    const [job] = await db.select().from(publishAttempts).where(eq(publishAttempts.connectionId, acct.id));
+    expect(job?.error).toMatch(/disconnected/);
+  });
+
+  it("sets ai_disclosure from the video, sends it as the AI label, and never posts an AI-generated video without it", async () => {
+    const { workspace, user, video, db } = await setup("aidisclosure");
+    const tiktok = await connectMockAccount({ workspaceId: workspace.id, platform: "tiktok", userId: user.id });
+    const instagram = await connectMockAccount({ workspaceId: workspace.id, platform: "instagram", userId: user.id });
+    await scheduleVideo(video.id, new Date(Date.now() - 1_000), user.id, [
+      { accountId: tiktok.id, mode: "direct" },
+      { accountId: instagram.id, mode: "reel" },
+    ]);
+    await processDueItems(new Date(), { workspaceId: workspace.id });
+    const queued = await db.select().from(publishAttempts).where(eq(publishAttempts.videoId, video.id));
+    expect(queued.map((job) => job.aiDisclosure)).toEqual([true, true]);
+    const ttJob = queued.find((job) => job.platform === "tiktok")!;
+    const igJob = queued.find((job) => job.platform === "instagram")!;
+
+    expect((await runPublishJob(ttJob.id)).status).toBe("succeeded");
+    const ttEvents = await db.select().from(publishEvents).where(eq(publishEvents.jobId, ttJob.id));
+    expect(ttEvents.find((event) => event.status === "submitted")?.detail).toMatchObject({ is_aigc: true });
+
+    // Someone clears the flag on an AI-generated video: the dispatcher refuses and sends nothing.
+    await db.update(publishAttempts).set({ aiDisclosure: false }).where(eq(publishAttempts.id, igJob.id));
+    const refused = await runPublishJob(igJob.id);
+    expect(refused.status).toBe("failed");
+    expect(refused.error).toMatch(/AI label/);
+    const igEvents = await db.select().from(publishEvents).where(eq(publishEvents.jobId, igJob.id));
+    expect(igEvents.map((event) => event.status)).toEqual(["processing", "failed"]);
+
+    // A video the approver confirmed is not AI-generated is queued without the flag and posted without the label.
+    const plain = await setup("aidisclosure-off");
+    await db.update(videos).set({ aiGenerated: false }).where(eq(videos.id, plain.video.id));
+    const fb = await connectMockAccount({ workspaceId: plain.workspace.id, platform: "facebook", userId: plain.user.id });
+    await scheduleVideo(plain.video.id, new Date(Date.now() - 1_000), plain.user.id, [{ accountId: fb.id, mode: "reel" }]);
+    await processDueItems(new Date(), { workspaceId: plain.workspace.id });
+    const [fbJob] = await db.select().from(publishAttempts).where(eq(publishAttempts.videoId, plain.video.id));
+    expect(fbJob?.aiDisclosure).toBe(false);
+    expect((await runPublishJob(fbJob!.id)).status).toBe("succeeded");
+    const fbEvents = await db.select().from(publishEvents).where(eq(publishEvents.jobId, fbJob!.id));
+    expect(fbEvents.find((event) => event.status === "submitted")?.detail).toMatchObject({ is_ai_generated: false });
   });
 
   it("cron tick needs CRON_SECRET, then runs due items and the publish queue", async () => {
@@ -211,7 +254,7 @@ describe("analytics", () => {
     await scheduleVideo(video.id, new Date(Date.now() - 1_000), user.id, [{ accountId: acct.id, mode: "direct" }]);
     await processDueItems(new Date(), { workspaceId: workspace.id });
     await processPublishQueue({ workspaceId: workspace.id });
-    const [job] = await db.select().from(publishJobs).where(eq(publishJobs.accountId, acct.id));
+    const [job] = await db.select().from(publishAttempts).where(eq(publishAttempts.connectionId, acct.id));
     const seen: unknown[] = [];
     vi.stubGlobal(
       "fetch",
@@ -219,12 +262,12 @@ describe("analytics", () => {
         expect(url).toBe(TIKTOK_ENDPOINTS.videoQuery);
         seen.push(JSON.parse(String(init?.body)));
         return new Response(
-          JSON.stringify({ data: { videos: [{ id: job!.externalId, view_count: 1200, like_count: 90, comment_count: 4, share_count: 6 }] }, error: { code: "ok" } }),
+          JSON.stringify({ data: { videos: [{ id: job!.externalPostId, view_count: 1200, like_count: 90, comment_count: 4, share_count: 6 }] }, error: { code: "ok" } }),
         );
       }),
     );
     expect(await refreshMetrics(workspace.id, { publishers: { tiktok: tiktokPublisher } })).toEqual({ snapshots: 1, skipped: 0 });
-    expect(seen[0]).toEqual({ filters: { video_ids: [job!.externalId] } });
+    expect(seen[0]).toEqual({ filters: { video_ids: [job!.externalPostId] } });
     const report = await workspaceAnalytics(workspace.id);
     expect(report.posts[0]).toMatchObject({ views: 1200, likes: 90, comments: 4, shares: 6, engagementRate: 8.33 });
   });

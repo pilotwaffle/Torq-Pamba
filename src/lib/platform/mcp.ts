@@ -38,7 +38,7 @@ export const TOOLS: Tool[] = [
   {
     name: "get_workspace",
     title: "Workspace and budget",
-    description: "Workspace name, plan, monthly budget left, and this credential's scope and spending cap.",
+    description: "Workspace name, plan, monthly budget left, and this credential's scope and monthly credit ceiling.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     run: (p) => getWorkspaceInfo(p),
   },
