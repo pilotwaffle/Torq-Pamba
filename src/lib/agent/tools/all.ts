@@ -4,6 +4,8 @@ export { brandBriefTool } from "./brand-brief";
 export { chooseVoiceTool } from "./choose-voice";
 export { cloneVoiceTool } from "./clone-voice";
 export { estimateCostTool } from "./estimate-cost";
+export { findTrendsTool } from "./find-trends";
+export { ideasTool } from "./ideas";
 export { listScheduleTool } from "./list-schedule";
 export { listVideosTool } from "./list-videos";
 export { pickAvatarTool } from "./pick-avatar";

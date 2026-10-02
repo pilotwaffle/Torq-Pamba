@@ -5,5 +5,6 @@ export { adapter as heygen } from "./heygen";
 export { adapter as heygenLipsync } from "./heygen-lipsync";
 export { adapter as kling } from "./kling";
 export { adapter as llm } from "./llm";
+export { adapter as research } from "@/lib/research/sources";
 export { adapter as runway } from "./runway";
 export { adapter as xai } from "./xai";

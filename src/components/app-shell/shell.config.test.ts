@@ -21,6 +21,7 @@ describe("app shell config", () => {
       "Onboarding",
       "Brand brief",
       "Avatars",
+      "Research",
       "Chat",
       "Videos",
       "Schedule",

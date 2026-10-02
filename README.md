@@ -203,6 +203,10 @@ Every variable in `.env.example`. Empty means the default in the last column. Do
 | `STRIPE_WEBHOOK_SECRET` | For the webhook | empty | Verifies `POST /api/billing/webhook`. When empty, the webhook returns 401 unless `ALLOW_INSECURE_LOCAL_ENDPOINTS=1` outside production |
 | `CRON_SECRET` | For the cron tick | empty | `POST /api/cron/tick` requires `Authorization: Bearer <secret>`. When empty, the tick returns 401 unless `ALLOW_INSECURE_LOCAL_ENDPOINTS=1` outside production |
 | `ALLOW_INSECURE_LOCAL_ENDPOINTS` | No | empty | Set to `1` on a local machine to run the cron tick and the webhook without their secrets. Ignored when `NODE_ENV` is `production` |
+| `RESEARCH_SOURCE` | No | empty | Research data sources, comma-separated in order of preference: `youtube`, `scrapecreators`, `apify`. Empty or `mock` uses sample data. A live source also needs `PROVIDER_MODE=live` and its key |
+| `YOUTUBE_API_KEY` | No | empty | YouTube Data API v3 key for research (official API, public channels and Shorts). Used only when `PROVIDER_MODE=live` |
+| `SCRAPECREATORS_API_KEY` | No | empty | ScrapeCreators key for research on public TikTok and Instagram posts. Used only when `PROVIDER_MODE=live` |
+| `APIFY_TOKEN` | No | empty | Apify token for research through the TikTok Scraper actor (public posts). Used only when `PROVIDER_MODE=live` |
 
 `npm run capture` sets `CAPTURE=1` itself. That variable is not part of app configuration.
 

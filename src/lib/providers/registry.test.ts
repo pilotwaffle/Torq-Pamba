@@ -52,6 +52,7 @@ describe("provider registry", () => {
       "heygen-lipsync",
       "kling",
       "llm",
+      "research",
       "runway",
       "xai",
     ]);
