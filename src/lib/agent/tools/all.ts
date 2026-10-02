@@ -1,6 +1,8 @@
 // One line per tool file, alphabetical. Order of matching comes from each tool's `priority`.
 export { approveVideoTool } from "./approve-video";
 export { brandBriefTool } from "./brand-brief";
+export { chooseVoiceTool } from "./choose-voice";
+export { cloneVoiceTool } from "./clone-voice";
 export { estimateCostTool } from "./estimate-cost";
 export { listScheduleTool } from "./list-schedule";
 export { listVideosTool } from "./list-videos";

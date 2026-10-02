@@ -196,6 +196,7 @@ Every variable in `.env.example`. Empty means the default in the last column. Do
 | `KLING_ACCESS_KEY` | No | empty | Kling avatar access key. Live calls need this and `KLING_SECRET_KEY` |
 | `KLING_SECRET_KEY` | No | empty | Kling avatar secret. Used only when `PROVIDER_MODE=live` |
 | `HEYGEN_API_KEY` | No | empty | HeyGen Avatar IV. Used only when `PROVIDER_MODE=live` |
+| `ELEVENLABS_API_KEY` | No | empty | ElevenLabs text-to-speech, instant voice clones, and voice previews. Without it, voices use mock WAV audio. Used only when `PROVIDER_MODE=live` |
 | `STRIPE_SECRET_KEY` | No | empty | Stripe test secret (`sk_test_…`). A value starting with `sk_live_` throws and checkout does not start. With no key, billing simulates a test-mode upgrade and labels it simulated |
 | `STRIPE_PRICE_CREATOR` | No | empty | Stripe Price id for the Creator plan. Required only when a test secret is set and someone checks out Creator |
 | `STRIPE_PRICE_STUDIO` | No | empty | Stripe Price id for the Studio plan. Same rule as Creator |

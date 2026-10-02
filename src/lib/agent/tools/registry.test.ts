@@ -39,6 +39,13 @@ describe("chat tool registry", () => {
     ]);
   });
 
+  // One entry per wave 1 feature that ships chat tools; each keeps its own tools registered.
+  it.each([
+    ["voices", ["choose-voice", "clone-voice"]],
+  ])("ships the %s chat tools", (_feature, names) => {
+    expect(chatTools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(names));
+  });
+
   it("plugs in a new tool without touching the others", async () => {
     const registry = createToolRegistry([...chatTools.tools, echo]);
     const found = registry.match("echo hello!");
