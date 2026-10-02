@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { getDb } from "@/db";
 import {
@@ -303,7 +303,12 @@ describe("regenerateScene", () => {
 
     const fallback = await regenerateScene({ workspace, videoId, sceneNumber: 1, actor: user.id });
     expect(fallback.status).toBe("ready");
-    const attempts = await db.select().from(generationAttempts).where(eq(generationAttempts.videoId, videoId));
+    // One take's attempts are inserted together and share created_at, so the chain step breaks the tie.
+    const attempts = await db
+      .select()
+      .from(generationAttempts)
+      .where(eq(generationAttempts.videoId, videoId))
+      .orderBy(asc(generationAttempts.createdAt), sql`(${generationAttempts.detail}->>'step')::int`);
     const regenAttempts = attempts.filter((row) => row.detail?.takeNumber === 2);
     expect(regenAttempts.map((row) => row.status)).toEqual(["refused", "ok"]);
     expect(Number(regenAttempts[0]?.costUsd)).toBe(0);

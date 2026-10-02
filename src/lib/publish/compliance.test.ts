@@ -1,6 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { getDb } from "@/db";
 import { publishAttempts, publishEvents, publishingConnections, socialPlatform, videos } from "@/db/schema";
@@ -217,7 +217,7 @@ describe("only TikTok, Instagram and Facebook are reachable by publishing", () =
     const result = await runPublishJob(attempt!.id);
     expect(result.status).toBe("failed");
     expect(result.error).toMatch(/not supported/);
-    const events = await db.select().from(publishEvents).where(eq(publishEvents.jobId, attempt!.id));
+    const events = await db.select().from(publishEvents).where(eq(publishEvents.jobId, attempt!.id)).orderBy(asc(publishEvents.createdAt));
     expect(events.map((event) => event.status)).toEqual(["processing", "failed"]);
   });
 });

@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { POST as cronTick } from "@/app/api/cron/tick/route";
 import { getDb } from "@/db";
@@ -89,7 +89,7 @@ describe("publish flow (mock platforms)", () => {
     expect(tiktokJob?.completedAt).toBeInstanceOf(Date);
     expect(igJob).toMatchObject({ status: "published", privacy: "PUBLIC", mode: "reel", aiDisclosure: true });
 
-    const events = await db.select().from(publishEvents).where(eq(publishEvents.jobId, tiktokJob!.id));
+    const events = await db.select().from(publishEvents).where(eq(publishEvents.jobId, tiktokJob!.id)).orderBy(asc(publishEvents.createdAt));
     expect(events.map((event) => event.status)).toEqual(["processing", "forced_private", "submitted", "succeeded"]);
     const audits = await db.select().from(auditLog).where(eq(auditLog.workspaceId, workspace.id));
     expect(audits.filter((entry) => entry.action === "publish.succeeded")).toHaveLength(2);
@@ -226,7 +226,7 @@ describe("publish flow (mock platforms)", () => {
       await db.update(videos).set({ approval }).where(eq(videos.id, video.id));
       const job = await enqueue();
       const result = await runPublishJob(job.id);
-      const events = await db.select().from(publishEvents).where(eq(publishEvents.jobId, job.id));
+      const events = await db.select().from(publishEvents).where(eq(publishEvents.jobId, job.id)).orderBy(asc(publishEvents.createdAt));
       return { result, statuses: events.map((event) => event.status) };
     };
 
