@@ -42,6 +42,7 @@ describe("chat tool registry", () => {
   // One entry per wave 1 feature that ships chat tools; each keeps its own tools registered.
   it.each([
     ["voices", ["choose-voice", "clone-voice"]],
+    ["editor", ["regenerate-scene"]],
   ])("ships the %s chat tools", (_feature, names) => {
     expect(chatTools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(names));
   });

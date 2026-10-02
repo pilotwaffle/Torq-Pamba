@@ -8,6 +8,7 @@ export { listScheduleTool } from "./list-schedule";
 export { listVideosTool } from "./list-videos";
 export { pickAvatarTool } from "./pick-avatar";
 export { planTool } from "./plan";
+export { regenerateSceneTool } from "./regenerate-scene";
 export { reviseScriptTool } from "./revise-script";
 export { scheduleTool } from "./schedule";
 export { startGenerationTool } from "./start-generation";

@@ -3,11 +3,13 @@ import { notFound } from "next/navigation";
 import { ApprovalPanel } from "@/components/approval-panel";
 import { PreviewPlayer } from "@/components/preview-player";
 import { SchedulePanel } from "@/components/schedule-panel";
-import { PageHeader, StatusBadge, cardClass, statusLabel } from "@/components/ui";
+import { PageHeader, StatusBadge, cardClass, secondaryButton, statusLabel } from "@/components/ui";
 import { requireWorkspace } from "@/lib/auth/guards";
 import { PRIVACY_OPTIONS } from "@/lib/approval";
+import { isEditableStatus, sceneCaptionText } from "@/lib/editor/state";
 import { activeItemForVideo, formatWhen } from "@/lib/schedule";
 import { attemptSummaryFor, getWorkspaceVideo, manifestOf } from "@/lib/videos";
+import type { StitchedManifest } from "@/lib/router";
 
 export const dynamic = "force-dynamic";
 
@@ -64,11 +66,14 @@ export default async function VideoPage({
       ) : null}
       {attempts ? <p className="mb-4 text-sm text-zinc-700">{attempts}</p> : null}
       <div className="grid items-start gap-8 lg:grid-cols-[minmax(16rem,20rem)_minmax(0,1fr)]">
-        <div>{manifest ? <PreviewPlayer hook={manifest.hook} scenes={manifest.scenes.map((scene) => ({
-              frameUrl: scene.frameUrl,
-              line: scene.line,
-              durationS: scene.durationS,
-            }))} /> : null}</div>
+        <div className="flex flex-col gap-3">
+          {manifest ? <VideoMedia manifest={manifest} /> : null}
+          {manifest ? (
+            <Link href={`/app/videos/${video.id}/edit`} className={`${secondaryButton} w-full`}>
+              {isEditableStatus(video.status) ? "Edit scenes, captions and hook" : "View scenes and takes"}
+            </Link>
+          ) : null}
+        </div>
         <div className="flex min-w-0 flex-col gap-6">
           {video.status === "ready" ? <ApprovalPanel videoId={video.id} aiDefault={video.aiGenerated} /> : null}
           {showSchedule ? (
@@ -94,5 +99,26 @@ export default async function VideoPage({
         </div>
       </div>
     </main>
+  );
+}
+
+/**
+ * The video shown on the review page.
+ *
+ * Rendered MP4 slot (feature a): import the render player here and return it
+ * when `videos.current_render_id` points at a ready render, keeping the
+ * PreviewPlayer below as the fallback for videos without one. Pass the video
+ * row in as a prop when you need it.
+ */
+function VideoMedia({ manifest }: { manifest: StitchedManifest }) {
+  return (
+    <PreviewPlayer
+      hook={manifest.hook}
+      scenes={manifest.scenes.map((scene, index) => ({
+        frameUrl: scene.frameUrl,
+        line: sceneCaptionText(manifest, index),
+        durationS: scene.durationS,
+      }))}
+    />
   );
 }
