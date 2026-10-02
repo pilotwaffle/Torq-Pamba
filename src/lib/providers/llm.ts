@@ -1,5 +1,5 @@
 import { isLive, postJson } from "./live";
-import type { LlmProvider } from "./types";
+import { defineAdapter, type LlmProvider } from "./types";
 
 export function buildClaudeRequest(system: string, user: string) {
   return { model: "claude-sonnet-5", max_tokens: 2000, system, messages: [{ role: "user", content: user }] };
@@ -81,6 +81,8 @@ export const geminiChat: LlmProvider = {
     return completeGemini(system, user);
   },
 };
+
+export const adapter = defineAdapter({ id: "llm", llm: [claudeSonnet, grokChat, geminiChat] });
 
 /** Live chat model, or null when PROVIDER_MODE is not live or no key is set. */
 export async function completeLive(system: string, user: string): Promise<string | null> {

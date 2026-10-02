@@ -1,7 +1,8 @@
-import { GROK_IMAGINE_IMAGE_USD, GROK_IMAGINE_VIDEO_USD_PER_SEC } from "@/lib/pricing";
-import { isLive, pollUntil, postJson, getJson } from "./live";
-import { mockGenerateClip, mockGenerateImage } from "./mock";
-import { ProviderUnavailableError, type ClipRequest, type ClipResult, type ImageProvider, type VideoProvider } from "./types";
+import { catalog, type VideoModel } from "@/lib/models";
+import { catalogVideoProvider } from "./catalog";
+import { getJson, isLive, pollUntil, postJson } from "./live";
+import { mockGenerateImage } from "./mock";
+import { defineAdapter, ProviderUnavailableError, type ClipRequest, type ClipResult, type ImageProvider } from "./types";
 
 const ROOT = "https://api.x.ai/v1";
 
@@ -19,7 +20,7 @@ export function buildGrokImageRequest(prompt: string) {
   return { model: "grok-imagine-image", prompt, n: 1, response_format: "url" };
 }
 
-async function liveVideo(req: ClipRequest): Promise<ClipResult> {
+async function liveVideo(req: ClipRequest, model: VideoModel): Promise<ClipResult> {
   const headers = { authorization: `Bearer ${process.env.XAI_API_KEY?.trim() ?? ""}` };
   const created = (await postJson(
     "grok-imagine-video",
@@ -39,27 +40,19 @@ async function liveVideo(req: ClipRequest): Promise<ClipResult> {
     providerId: "grok-imagine-video",
     durationS: req.durationS,
     frameUrls: [],
-    costUsd: GROK_IMAGINE_VIDEO_USD_PER_SEC * req.durationS,
+    costUsd: model.usdPerSecond * req.durationS,
   };
 }
 
-export const grokImagineVideo: VideoProvider = {
-  id: "grok-imagine-video",
-  vendor: "xai",
-  label: "Grok Imagine Video",
-  tier: "budget",
-  pricePerSecondUsd: GROK_IMAGINE_VIDEO_USD_PER_SEC,
-  maxDurationS: 60,
-  async generateClip(req) {
-    if (isLive(["XAI_API_KEY"])) return liveVideo(req);
-    return mockGenerateClip(this.id, this.pricePerSecondUsd, req);
-  },
-};
+export const grokImagineVideo = catalogVideoProvider("grok-imagine-video", { envKeys: ["XAI_API_KEY"], live: liveVideo });
+
+const imageModel = catalog.image("grok-imagine-image");
+const GROK_IMAGINE_IMAGE_USD = imageModel.usdPerImage;
 
 export const grokImagineImage: ImageProvider = {
   id: "grok-imagine-image",
   vendor: "xai",
-  label: "Grok Imagine Image",
+  label: imageModel.label,
   pricePerImageUsd: GROK_IMAGINE_IMAGE_USD,
   async generateImage(req) {
     if (isLive(["XAI_API_KEY"])) {
@@ -77,3 +70,5 @@ export const grokImagineImage: ImageProvider = {
     return mockGenerateImage("grok-imagine-image", GROK_IMAGINE_IMAGE_USD, req.prompt);
   },
 };
+
+export const adapter = defineAdapter({ id: "xai", video: [grokImagineVideo], image: [grokImagineImage] });

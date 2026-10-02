@@ -33,6 +33,12 @@ export function createCatalog(models: readonly ModelConfig[]) {
     return model;
   }
 
+  function image(id: string): ImageModel {
+    const model = find(id);
+    if (model?.kind !== "image") throw new Error(`Unknown image model: ${id}`);
+    return model;
+  }
+
   function fallbackChain(tier: Tier): string[] {
     return modelsOf("video")
       .filter((model) => model.chains?.[tier] != null)
@@ -70,6 +76,7 @@ export function createCatalog(models: readonly ModelConfig[]) {
     modelsOf,
     isVideo,
     video,
+    image,
     fallbackChain,
     tierDefault,
     scriptModel: (tier: Tier) => forTier("script", tier),

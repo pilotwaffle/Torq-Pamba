@@ -1,7 +1,7 @@
-import { HEYGEN_AVATAR_IV_USD_PER_SEC } from "@/lib/pricing";
-import { getJson, isLive, pollUntil, postJson } from "./live";
-import { mockGenerateClip } from "./mock";
-import { ProviderUnavailableError, type ClipRequest, type ClipResult, type VideoProvider } from "./types";
+import type { VideoModel } from "@/lib/models";
+import { catalogVideoProvider } from "./catalog";
+import { getJson, pollUntil, postJson } from "./live";
+import { defineAdapter, ProviderUnavailableError, type ClipRequest, type ClipResult } from "./types";
 
 const ROOT = "https://api.heygen.com";
 
@@ -18,7 +18,7 @@ export function buildHeygenRequest(req: ClipRequest) {
   };
 }
 
-async function liveClip(req: ClipRequest): Promise<ClipResult> {
+async function liveClip(req: ClipRequest, model: VideoModel): Promise<ClipResult> {
   const headers = { "x-api-key": process.env.HEYGEN_API_KEY?.trim() ?? "" };
   const created = (await postJson("heygen-avatar-iv", `${ROOT}/v2/video/generate`, buildHeygenRequest(req), headers)) as {
     data?: { video_id?: string };
@@ -39,19 +39,10 @@ async function liveClip(req: ClipRequest): Promise<ClipResult> {
     providerId: "heygen-avatar-iv",
     durationS: req.durationS,
     frameUrls: [],
-    costUsd: HEYGEN_AVATAR_IV_USD_PER_SEC * req.durationS,
+    costUsd: model.usdPerSecond * req.durationS,
   };
 }
 
-export const heygenAvatar: VideoProvider = {
-  id: "heygen-avatar-iv",
-  vendor: "heygen",
-  label: "HeyGen Avatar IV",
-  tier: "budget",
-  pricePerSecondUsd: HEYGEN_AVATAR_IV_USD_PER_SEC,
-  maxDurationS: 60,
-  async generateClip(req) {
-    if (isLive(["HEYGEN_API_KEY"])) return liveClip(req);
-    return mockGenerateClip(this.id, this.pricePerSecondUsd, req);
-  },
-};
+export const heygenAvatar = catalogVideoProvider("heygen-avatar-iv", { envKeys: ["HEYGEN_API_KEY"], live: liveClip });
+
+export const adapter = defineAdapter({ id: "heygen", video: [heygenAvatar] });
