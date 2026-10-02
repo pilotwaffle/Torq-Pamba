@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test": "PGLITE_DIR=memory DATABASE_URL= vitest run",
     "test:e2e": "playwright test",
-    "capture": "CAPTURE=1 playwright test e2e/capture.spec.ts",
+    "capture": "CAPTURE=1 playwright test e2e/core/capture.spec.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx scripts/migrate.ts",
     "setup": "node scripts/setup.mjs"
