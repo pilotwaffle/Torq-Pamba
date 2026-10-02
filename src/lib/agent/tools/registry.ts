@@ -35,12 +35,15 @@ export function createToolRegistry(tools: readonly ChatTool[]) {
     await tool.run(ctx, args);
   }
 
-  /** Tool definitions in the JSON Schema shape tool-calling LLM APIs accept. */
+  /**
+   * Tool definitions in the JSON Schema shape tool-calling LLM APIs accept. The
+   * input side of each schema, so fields with a default are optional for the caller.
+   */
   function definitions() {
     return ordered.map((tool) => ({
       name: tool.name,
       description: tool.description,
-      inputSchema: z.toJSONSchema(tool.parameters),
+      inputSchema: z.toJSONSchema(tool.parameters, { io: "input" }),
     }));
   }
 

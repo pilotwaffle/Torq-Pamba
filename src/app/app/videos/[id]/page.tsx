@@ -1,17 +1,19 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ApprovalPanel } from "@/components/approval-panel";
-import { PreviewPlayer } from "@/components/preview-player";
+import { RenderedVideo } from "@/components/rendered-video";
 import { SchedulePanel } from "@/components/schedule-panel";
-import { PageHeader, StatusBadge, cardClass, statusLabel } from "@/components/ui";
+import { PageHeader, StatusBadge, cardClass, secondaryButton, statusLabel } from "@/components/ui";
 import { requireWorkspace } from "@/lib/auth/guards";
 import { PRIVACY_OPTIONS } from "@/lib/approval";
+import { isEditableStatus, sceneCaptionText } from "@/lib/editor/state";
+import { renderViewFor, rerenderPending } from "@/lib/media/renders";
 import { listAccounts } from "@/lib/publish/accounts";
 import { PLATFORM_LABEL, PLATFORM_MODES } from "@/lib/publish/config";
 import { listPublishJobs, publishStatusLabel } from "@/lib/publish/queue";
-import { mediaUrlPath } from "@/lib/media/storage";
 import { activeItemForVideo, formatWhen } from "@/lib/schedule";
 import { attemptSummaryFor, getWorkspaceVideo, manifestOf } from "@/lib/videos";
+import type { StitchedManifest } from "@/lib/router";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +34,8 @@ export default async function VideoPage({
 
   const manifest = manifestOf(video.manifest);
   const attempts = await attemptSummaryFor(video.id);
+  const render = await renderViewFor(video);
+  const rerendering = await rerenderPending(video);
   const approval = video.approval ?? {};
   const privacy = typeof approval.privacy === "string" ? approval.privacy : "";
   const queued = await activeItemForVideo(video.id);
@@ -77,11 +81,24 @@ export default async function VideoPage({
       ) : null}
       {attempts ? <p className="mb-4 text-sm text-zinc-700">{attempts}</p> : null}
       <div className="grid items-start gap-8 lg:grid-cols-[minmax(16rem,20rem)_minmax(0,1fr)]">
-        <div>{manifest ? <PreviewPlayer hook={manifest.hook} scenes={manifest.scenes.map((scene) => ({
-              frameUrl: scene.frameUrl,
-              line: scene.line,
-              durationS: scene.durationS,
-            }))} /> : null}</div>
+        <div className="flex flex-col gap-3">
+          <RenderedVideo status={video.status} render={render} manifest={manifest ? withEditedLines(manifest) : null} />
+          {render.videoUrl && manifest?.hook ? (
+            <p className="text-sm text-zinc-700">
+              <span className="font-medium">Hook:</span> {manifest.hook}
+            </p>
+          ) : null}
+          {rerendering ? (
+            <p className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">
+              Your edits are being rendered into a new MP4. Reload to see it.
+            </p>
+          ) : null}
+          {manifest ? (
+            <Link href={`/app/videos/${video.id}/edit`} className={`${secondaryButton} w-full`}>
+              {isEditableStatus(video.status) ? "Edit scenes, captions and hook" : "View scenes and takes"}
+            </Link>
+          ) : null}
+        </div>
         <div className="flex min-w-0 flex-col gap-6">
           {video.status === "ready" ? <ApprovalPanel videoId={video.id} aiDefault={video.aiGenerated} /> : null}
           {showSchedule ? (
@@ -104,12 +121,6 @@ export default async function VideoPage({
             </section>
           ) : null}
           {showSchedule ? <SchedulePanel videoId={video.id} mode={queueMode} whenLabel={whenLabel} accounts={accounts} /> : null}
-          {video.mediaKey ? (
-            <section className={`${cardClass} p-4 text-sm`} aria-label="Rendered video">
-              <h2 className="text-lg font-semibold">Rendered MP4</h2>
-              <video controls className="mt-3 w-full max-w-xs rounded-lg" src={mediaUrlPath(video.mediaKey)} />
-            </section>
-          ) : null}
           {jobs.length > 0 ? (
             <section className={`${cardClass} overflow-x-auto p-4 text-sm`} aria-labelledby="publish-status-heading">
               <h2 id="publish-status-heading" className="text-lg font-semibold">
@@ -146,4 +157,12 @@ export default async function VideoPage({
       </div>
     </main>
   );
+}
+
+/** The manifest with each scene's line replaced by its (possibly edited) captions, for the slideshow fallback. */
+function withEditedLines(manifest: StitchedManifest): StitchedManifest {
+  return {
+    ...manifest,
+    scenes: manifest.scenes.map((scene, index) => ({ ...scene, line: sceneCaptionText(manifest, index) })),
+  };
 }

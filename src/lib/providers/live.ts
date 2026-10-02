@@ -1,4 +1,3 @@
-import { extensionFor, MediaError, mediaMaxBytes, saveMedia } from "@/lib/media/storage";
 import { ProviderRefusedError, ProviderUnavailableError } from "./types";
 
 export function isLive(envKeys: string[]): boolean {
@@ -22,7 +21,7 @@ export async function postJson(
       signal: AbortSignal.timeout(20_000),
     });
   } catch (error) {
-    throw new ProviderUnavailableError(providerId, error instanceof Error ? error.message : "network");
+    throw new ProviderUnavailableError(providerId, error instanceof Error ? error.message : "network", { retryable: true });
   }
   return readBody(providerId, response);
 }
@@ -32,11 +31,15 @@ export async function getJson(providerId: string, url: string, headers: Record<s
   try {
     response = await fetch(url, { headers, signal: AbortSignal.timeout(20_000) });
   } catch (error) {
-    throw new ProviderUnavailableError(providerId, error instanceof Error ? error.message : "network");
+    throw new ProviderUnavailableError(providerId, error instanceof Error ? error.message : "network", { retryable: true });
   }
   return readBody(providerId, response);
 }
 
+/**
+ * 400 / 422 and safety wording are refusals (the chain moves on). 408, 429 and
+ * 5xx are retryable. Anything else (401, 403, 404) is a permanent failure.
+ */
 async function readBody(providerId: string, response: Response): Promise<unknown> {
   const text = await response.text();
   let json: unknown = null;
@@ -49,10 +52,11 @@ async function readBody(providerId: string, response: Response): Promise<unknown
   }
   if (!response.ok) {
     const message = text.slice(0, 300);
-    if (response.status === 400 || response.status === 422 || /safety|refus|blocked/i.test(message)) {
+    if (response.status === 400 || response.status === 422 || /safety|refus|blocked|moderation/i.test(message)) {
       throw new ProviderRefusedError(providerId, message || "Provider refused the prompt");
     }
-    throw new ProviderUnavailableError(providerId, message || `HTTP ${response.status}`);
+    const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+    throw new ProviderUnavailableError(providerId, message || `HTTP ${response.status}`, { retryable });
   }
   return json;
 }
@@ -74,9 +78,9 @@ export function pollTimeoutMs(): number {
 }
 
 /**
- * Poll a long-running vendor job until `check` returns a value (not null).
- * Real Veo / Grok / Seedance jobs take tens of seconds to minutes, so the
- * default budget is 10 minutes with 5 s → 20 s exponential backoff.
+ * Poll a long-running job until `check` returns a value (not null), with
+ * 5 s → 20 s exponential backoff and a 10 minute default budget. Clip jobs use
+ * the async job runner (src/lib/jobs); this is for the publishers' status polls.
  */
 export async function pollUntil<T>(
   providerId: string,
@@ -101,34 +105,17 @@ export async function pollUntil<T>(
   }
 }
 
-/**
- * Download a finished clip from the vendor and store it. Returns the storage key.
- * Only https URLs are fetched; the body must be video/* and under MEDIA_MAX_BYTES.
- */
-export async function downloadClip(
-  providerId: string,
-  url: string,
-  headers: Record<string, string> = {},
-): Promise<string> {
-  if (!/^https:\/\//i.test(url)) throw new ProviderUnavailableError(providerId, "output URL is not https");
-  let response: Response;
-  try {
-    response = await fetch(url, { headers, redirect: "follow", signal: AbortSignal.timeout(120_000) });
-  } catch (error) {
-    throw new ProviderUnavailableError(providerId, error instanceof Error ? error.message : "download failed");
+/** Nearest allowed value, preferring the larger one on a tie; the stitcher trims or pads to the scene length. */
+export function nearestDuration(target: number, allowed: readonly number[]): number {
+  let best = allowed[0] ?? target;
+  for (const value of allowed) {
+    if (Math.abs(value - target) < Math.abs(best - target) || (Math.abs(value - target) === Math.abs(best - target) && value > best)) {
+      best = value;
+    }
   }
-  if (!response.ok) throw new ProviderUnavailableError(providerId, `download HTTP ${response.status}`);
-  const type = response.headers.get("content-type") ?? "";
-  if (type && !/^(video\/|application\/octet-stream)/i.test(type)) {
-    throw new ProviderUnavailableError(providerId, `download is ${type}, not video`);
-  }
-  const declared = Number(response.headers.get("content-length") ?? "0");
-  if (declared > mediaMaxBytes()) throw new ProviderUnavailableError(providerId, "download is too large");
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  try {
-    return await saveMedia(bytes, extensionFor(type));
-  } catch (error) {
-    if (error instanceof MediaError) throw new ProviderUnavailableError(providerId, error.message);
-    throw error;
-  }
+  return best;
+}
+
+export function clampDuration(target: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Math.round(target)));
 }

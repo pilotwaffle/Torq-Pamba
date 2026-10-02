@@ -15,7 +15,7 @@ import type { ApprovalDraft, Privacy } from "@/lib/approval";
 import { engagementRate } from "@/lib/analytics";
 import { validateTargets } from "@/lib/publish/accounts";
 import { enqueuePublishJobs } from "@/lib/publish/queue";
-import { parseManifest, renderIfLive } from "@/lib/router";
+import { parseManifest } from "@/lib/router";
 import { approveVideo, getWorkspaceVideo } from "@/lib/videos";
 import { captionsWithHook, generateHookVariants, hookPolicyIssues } from "./hooks";
 import { addTile, provenHooks } from "./knowledge";
@@ -164,8 +164,6 @@ export async function createHookExperiment(input: {
         .returning({ id: videos.id });
       if (!row) throw new ExperimentError("Could not create a variant");
       videoId = row.id;
-      const mediaKey = await renderIfLive(input.workspace.id, row.id, variantManifest);
-      if (mediaKey) await db.update(videos).set({ mediaKey }).where(eq(videos.id, row.id));
     }
     await db.insert(hookVariants).values({
       experimentId: experiment.id,

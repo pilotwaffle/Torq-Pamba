@@ -5,6 +5,8 @@ const ci = !!process.env.CI;
 // The e2e server runs NODE_ENV=production, where sealing tokens and codes needs a key.
 // A fresh random key per run keeps any real key out of the tree.
 const e2eTokenKey = randomBytes(32).toString("hex");
+// PORT lets parallel worktrees run e2e side by side; it defaults to 3100.
+const port = Number(process.env.PORT ?? 3100);
 
 export default defineConfig({
   testDir: "e2e",
@@ -15,7 +17,7 @@ export default defineConfig({
   expect: { timeout: 20_000 },
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
-    baseURL: "http://localhost:3100",
+    baseURL: `http://localhost:${port}`,
     viewport: { width: 1440, height: 900 },
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
@@ -28,8 +30,8 @@ export default defineConfig({
   ],
   globalSetup: "./e2e/global-setup.ts",
   webServer: {
-    command: "npm run build && npm run start -- -p 3100",
-    url: "http://localhost:3100",
+    command: `npm run build && npm run start -- -p ${port}`,
+    url: `http://localhost:${port}`,
     reuseExistingServer: !ci,
     timeout: 180_000,
     env: {

@@ -1,18 +1,36 @@
 import { catalog } from "@/lib/models";
 import { catalogVideoProvider } from "./catalog";
-import { downloadClip, getJson, isLive, pollUntil, postJson, type PollOptions } from "./live";
+import { clampDuration, getJson, isLive, postJson } from "./live";
 import { mockGenerateImage } from "./mock";
-import { defineAdapter, ProviderUnavailableError, type ClipRequest, type ClipResult, type ImageProvider } from "./types";
+import {
+  defineAdapter,
+  ProviderUnavailableError,
+  type ClipPoll,
+  type ClipRequest,
+  type ImageProvider,
+} from "./types";
 
 const ROOT = "https://api.x.ai/v1";
+const VIDEO_ID = "grok-imagine-video";
 
+function authHeaders() {
+  return { authorization: `Bearer ${process.env.XAI_API_KEY?.trim() ?? ""}` };
+}
+
+/**
+ * POST /v1/videos/generations. `duration` is 1–15 s, `aspect_ratio` includes
+ * 9:16, `resolution` is 480p / 720p / 1080p, and `image.url` animates a start
+ * frame. https://docs.x.ai/developers/rest-api-reference/inference/videos and
+ * https://docs.x.ai/developers/model-capabilities/video/generation (read 2026-10-01).
+ */
 export function buildGrokVideoRequest(req: ClipRequest) {
   return {
-    model: "grok-imagine-video",
+    model: VIDEO_ID,
     prompt: req.prompt,
-    duration: req.durationS,
+    duration: clampDuration(req.durationS, 1, 15),
     resolution: "720p",
     aspect_ratio: "9:16",
+    ...(req.imageUrl ? { image: { url: req.imageUrl } } : {}),
   };
 }
 
@@ -22,57 +40,49 @@ export function buildGrokImageRequest(prompt: string) {
 
 type GrokVideoStatus = {
   status?: string;
-  url?: string;
-  video?: { url?: string };
-  data?: { url?: string }[];
-  error?: string | { message?: string };
+  video?: { url?: string | null; duration?: number; respect_moderation?: boolean };
+  error?: { code?: string; message?: string };
 };
 
-/** Grok Imagine video job status. Response shape is unverified; accepts the known variants. */
-export function grokVideoResult(status: GrokVideoStatus): string | null {
-  const state = (status.status ?? "").toLowerCase();
-  if (state === "failed" || state === "error" || state === "expired") {
-    const message = typeof status.error === "string" ? status.error : status.error?.message ?? state;
-    throw new ProviderUnavailableError("grok-imagine-video", message);
+/** Codes that mean the prompt or input was rejected rather than the service failing. */
+const GROK_REFUSAL_CODES = new Set(["invalid_argument", "permission_denied", "failed_precondition"]);
+
+/**
+ * GET /v1/videos/{request_id}: `status` is pending | done | expired | failed.
+ * When `video.respect_moderation` is false the url is empty, which is a refusal.
+ * https://docs.x.ai/developers/rest-api-reference/inference/videos (read 2026-10-01).
+ */
+export function readGrokVideoStatus(body: GrokVideoStatus): ClipPoll {
+  if (body.status === "done") {
+    const url = body.video?.url ?? "";
+    if (!url || body.video?.respect_moderation === false) {
+      return { state: "failed", refused: true, message: "Moderation blocked the video" };
+    }
+    return { state: "succeeded", output: { kind: "url", url, mimeType: "video/mp4" }, durationS: body.video?.duration };
   }
-  const url = status.video?.url ?? status.url ?? status.data?.[0]?.url;
-  if (state === "done" || state === "succeeded" || state === "completed") {
-    if (!url) throw new ProviderUnavailableError("grok-imagine-video", "job finished without a video");
-    return url;
+  if (body.status === "failed") {
+    const code = body.error?.code ?? "";
+    return { state: "failed", refused: GROK_REFUSAL_CODES.has(code), message: body.error?.message || code || "failed" };
   }
-  return null;
+  if (body.status === "expired") return { state: "failed", refused: false, message: "Request expired" };
+  return { state: "pending" };
 }
 
-export async function liveGrokVideo(req: ClipRequest, poll?: PollOptions): Promise<ClipResult> {
-  const model = catalog.video("grok-imagine-video");
-  const headers = { authorization: `Bearer ${process.env.XAI_API_KEY?.trim() ?? ""}` };
-  const created = (await postJson(
-    "grok-imagine-video",
-    `${ROOT}/videos/generations`,
-    buildGrokVideoRequest(req),
-    headers,
-  )) as { id?: string; request_id?: string };
-  const jobId = created.id ?? created.request_id;
-  if (!jobId) throw new ProviderUnavailableError("grok-imagine-video", "missing job");
-  const url = await pollUntil(
-    "grok-imagine-video",
-    async () =>
-      grokVideoResult((await getJson("grok-imagine-video", `${ROOT}/videos/generations/${jobId}`, headers)) as GrokVideoStatus),
-    poll,
-  );
-  const mediaKey = await downloadClip("grok-imagine-video", url);
-  return {
-    providerId: "grok-imagine-video",
-    durationS: req.durationS,
-    frameUrls: [],
-    mediaKey,
-    costUsd: model.usdPerSecond * req.durationS,
-  };
-}
-
-export const grokImagineVideo = catalogVideoProvider("grok-imagine-video", {
+export const grokImagineVideo = catalogVideoProvider(VIDEO_ID, {
   envKeys: ["XAI_API_KEY"],
-  live: (req) => liveGrokVideo(req),
+  live: {
+    async submit(req) {
+      const created = (await postJson(VIDEO_ID, `${ROOT}/videos/generations`, buildGrokVideoRequest(req), authHeaders())) as {
+        request_id?: string;
+      };
+      if (!created.request_id) throw new ProviderUnavailableError(VIDEO_ID, "missing request_id");
+      return { providerJobId: created.request_id };
+    },
+    async poll(providerJobId) {
+      const body = (await getJson(VIDEO_ID, `${ROOT}/videos/${encodeURIComponent(providerJobId)}`, authHeaders())) as GrokVideoStatus;
+      return readGrokVideoStatus(body);
+    },
+  },
 });
 
 const imageModel = catalog.image("grok-imagine-image");
@@ -85,12 +95,11 @@ export const grokImagineImage: ImageProvider = {
   pricePerImageUsd: GROK_IMAGINE_IMAGE_USD,
   async generateImage(req) {
     if (isLive(["XAI_API_KEY"])) {
-      const headers = { authorization: `Bearer ${process.env.XAI_API_KEY?.trim() ?? ""}` };
       const created = (await postJson(
         "grok-imagine-image",
         `${ROOT}/images/generations`,
         buildGrokImageRequest(req.prompt),
-        headers,
+        authHeaders(),
       )) as { data?: { url?: string }[] };
       const url = created.data?.[0]?.url;
       if (!url) throw new ProviderUnavailableError("grok-imagine-image", "missing image");

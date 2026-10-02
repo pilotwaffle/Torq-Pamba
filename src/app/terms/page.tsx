@@ -58,9 +58,9 @@ const sections: { title: string; paragraphs: string[]; list?: string[] }[] = [
   {
     title: "Billing",
     paragraphs: [
-      "Plan prices are placeholder test-mode prices: Free at $0, Creator at $29 per month, and Studio at $99 per month. They are not a live offer.",
-      "When a Stripe test key is configured, paid plans use Stripe Checkout in subscription mode. A live secret key (one that starts with sk_live_) is refused. With no Stripe key, an upgrade is simulated, labeled as simulated, and does not charge a card.",
-      "Model generation costs are separate estimates shown before you generate a clip. They are list-price estimates of provider cost, not the subscription, and a failed generation is not recorded as spend.",
+      "Plan prices are test-mode prices: Free at $0, Hobby at $16 per month with 1,600 credits, and Pro at $100 per month with 10,000 credits. Top-up packs cost $0.01 a credit. They are not a live offer.",
+      "When a Stripe test key is configured, paid plans use Stripe Checkout in subscription mode and top-ups use one-off Checkout payments. A live secret key (one that starts with sk_live_) is refused. With no Stripe key, checkout is simulated, labeled as simulated, grants credits, and does not charge a card.",
+      "Each generation shows its price in credits before you generate a clip. The credits are reserved when generation starts and returned if it fails. You are never charged more than the price shown.",
     ],
   },
   {

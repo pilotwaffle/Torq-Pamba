@@ -55,3 +55,7 @@ export function videoProvider(id: string): VideoProvider {
 export function imageProvider(id: string): ImageProvider {
   return registry.get("image", id);
 }
+
+export function renderProvider(id = "ffmpeg") {
+  return registry.get("render", id);
+}

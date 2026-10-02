@@ -13,7 +13,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install ffmpeg (mock clips and the final mp4 render)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: npm install
       - run: npm run lint
       - run: npm run typecheck
@@ -27,6 +28,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+      - name: Install ffmpeg (mock clips and the final mp4 render)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: npm install
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
@@ -58,7 +61,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install ffmpeg (mock clips and the final mp4 render)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: npm install
       - name: Unit tests against Postgres
         env:

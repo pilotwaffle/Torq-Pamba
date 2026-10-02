@@ -2,7 +2,6 @@ import { and, eq, gte, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
 import { members, publishAttempts, publishEvents, publishingConnections, videos } from "@/db/schema";
 import { writeAudit } from "@/lib/audit";
-import { publicMediaUrl } from "@/lib/media/storage";
 import { parseManifest } from "@/lib/router";
 import { accessTokenOf, handleOf } from "./accounts";
 import { asPlatform, isPublishLive, tiktokAudited, type Platform } from "./config";
@@ -131,7 +130,9 @@ export async function runPublishJob(
         caption: postCaption({ hook: manifest?.hook ?? "", title: video.title, captions: (manifest?.captions ?? []).map((c) => c.text) }),
         aiGenerated: true,
         approval: approval ?? {},
-        mediaUrl: video.mediaKey ? publicMediaUrl(video.mediaKey) : null,
+        // Wave 1 merge: the old media_key files are gone. The follow-up commit points this at the
+        // current render. Until then live publishers refuse (no MP4 URL); mock publishing is unaffected.
+        mediaUrl: null,
       },
       audited: tiktokAudited(),
       recentTikTokAccountIds: recent,

@@ -38,6 +38,9 @@ test("cron, Stripe webhook and media endpoints fail closed", async ({ request })
     data: { object: "event", type: "checkout.session.completed", data: { object: { metadata: { plan: "studio" } } } },
   });
   expect(webhook.status()).toBe(401);
+  // Wave 1's media route (src/app/api/media/[id]) serves only to a signed-in member of the workspace.
   const media = await request.get("/api/media/not-a-key.mp4");
-  expect(media.status()).toBe(404);
+  expect(media.status()).toBe(401);
+  const guessed = await request.get("/api/media/00000000-0000-4000-8000-000000000000");
+  expect(guessed.status()).toBe(401);
 });

@@ -1,6 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { portraitInner, type PortraitSpec } from "@/lib/avatars/portrait";
-import type { ClipRequest, ClipResult, ImageResult } from "./types";
+import { mockClipMp4 } from "@/lib/media/mock-clip";
+import type { ClipPoll, ClipRequest, ClipSubmission, ImageResult } from "./types";
 import { ProviderRefusedError } from "./types";
+
+/** Job ids from the mock provider. A job submitted while mocked is always polled by the mock. */
+export const MOCK_JOB_PREFIX = "mock:";
 
 const refusedOnce = new Set<string>();
 
@@ -156,24 +161,28 @@ function assertNotRefused(providerId: string, req: ClipRequest): void {
   throw new ProviderRefusedError(providerId, "Safety filter refused the prompt");
 }
 
-export async function mockGenerateClip(
-  providerId: string,
-  pricePerSecondUsd: number,
-  req: ClipRequest,
-): Promise<ClipResult> {
+/** Accepts a clip job, or refuses it the way a vendor safety filter would. */
+export async function mockSubmitClip(providerId: string, req: ClipRequest): Promise<ClipSubmission> {
   assertNotRefused(providerId, req);
+  return { providerJobId: `${MOCK_JOB_PREFIX}${providerId}:${randomUUID()}` };
+}
+
+export function isMockJob(providerJobId: string): boolean {
+  return providerJobId.startsWith(MOCK_JOB_PREFIX);
+}
+
+/** Finishes on the first poll with a real, tiny H.264 mp4 of the scene's placeholder frame. */
+export async function mockPollClip(providerId: string, req: ClipRequest): Promise<ClipPoll> {
+  const frameSvg = mockFrameSvg(providerId, req.prompt, {
+    sceneIndex: req.sceneIndex,
+    portraitSvg: req.portraitSvg,
+  });
+  const bytes = await mockClipMp4({ frameSvg, durationS: req.durationS, sceneIndex: req.sceneIndex ?? 0 });
   return {
-    providerId,
+    state: "succeeded",
+    output: { kind: "bytes", bytes, mimeType: "video/mp4" },
     durationS: req.durationS,
-    frameUrls: [
-      svgDataUrl(
-        mockFrameSvg(providerId, req.prompt, {
-          sceneIndex: req.sceneIndex,
-          portraitSvg: req.portraitSvg,
-        }),
-      ),
-    ],
-    costUsd: pricePerSecondUsd * req.durationS,
+    frameUrl: svgDataUrl(frameSvg),
   };
 }
 
