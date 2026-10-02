@@ -1,15 +1,15 @@
 import { and, asc, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { chatMessages, type Workspace } from "@/db/schema";
-import { buildPlan, isVideoPlan, type VideoPlan } from "@/lib/agent/plan";
-import { parseIntent } from "@/lib/agent/parse";
-import { listWorkspaceAvatars } from "@/lib/avatars/store";
-import { completeLive } from "@/lib/providers/llm";
+import { isVideoPlan } from "@/lib/agent/plan";
+import { chatTools, type ChatToolContext } from "@/lib/agent/tools/registry";
 import type { Tier } from "@/lib/pricing";
 import { BudgetExceededError, generateVideo } from "@/lib/router";
-import { formatWhen, listSchedule, scheduleApprovedVideo, scheduleStatusLabel, tomorrowAt } from "@/lib/schedule";
 
 const TIERS = new Set<Tier>(["budget", "standard", "premium"]);
+
+const FALLBACK =
+  "I can plan a video (“make a 30s video about …”), schedule an approved video, or tell you what’s scheduled.";
 
 export async function handleUserMessage(input: {
   workspace: Workspace;
@@ -26,78 +26,18 @@ export async function handleUserMessage(input: {
     content,
   });
 
-  const intent = parseIntent(content);
-  if (intent.type === "plan") {
-    await replyWithPlan(input.workspace, input.userId, content, intent);
+  const ctx: ChatToolContext = {
+    workspace: input.workspace,
+    userId: input.userId,
+    text: content,
+    reply: (message, data) => insertAssistant(input.workspace.id, input.userId, message, data),
+  };
+  const found = chatTools.match(content);
+  if (found) {
+    await found.tool.run(ctx, found.args);
     return;
   }
-  if (intent.type === "schedule") {
-    const when =
-      intent.when === "tomorrow-9am"
-        ? tomorrowAt(new Date(), input.workspace.timezone, 9, 0)
-        : "next";
-    const result = await scheduleApprovedVideo({
-      workspaceId: input.workspace.id,
-      actor: input.userId,
-      when,
-    });
-    const message = result.ok
-      ? `Scheduled “${result.title}” for ${formatWhen(result.scheduledAt, input.workspace.timezone)}.`
-      : result.message;
-    await insertAssistant(input.workspace.id, input.userId, message, { kind: "note" });
-    return;
-  }
-  if (intent.type === "list-schedule") {
-    const items = await listSchedule(input.workspace.id);
-    const message =
-      items.length === 0
-        ? "Nothing is scheduled."
-        : items
-            .map(
-              (item) =>
-                `${item.title || "Untitled"} — ${formatWhen(item.scheduledAt, input.workspace.timezone)} (${scheduleStatusLabel(item.status)})`,
-            )
-            .join("\n");
-    await insertAssistant(input.workspace.id, input.userId, message, { kind: "schedule", count: items.length });
-    return;
-  }
-  await insertAssistant(
-    input.workspace.id,
-    input.userId,
-    "I can plan a video (“make a 30s video about …”), schedule an approved video, or tell you what’s scheduled.",
-    { kind: "note" },
-  );
-}
-
-async function replyWithPlan(
-  workspace: Workspace,
-  userId: string,
-  content: string,
-  intent: { count: number; durationS: number; topic: string },
-) {
-  const avatars = await listWorkspaceAvatars(workspace.id);
-  const avatar = avatars.find((item) => item.isDefault) ?? avatars[0] ?? null;
-  const plan = buildPlan({
-    topic: intent.topic,
-    count: intent.count,
-    durationS: intent.durationS,
-    sourcePrompt: content,
-    brief: workspace.brief,
-    avatar: avatar ? { id: avatar.id, name: avatar.name, look: avatar.look } : null,
-  });
-  const live = await completeLive(planSystem(), planUser(plan)).catch(() => null);
-  const lead =
-    live?.trim() ||
-    `Here’s a ${plan.durationS}s plan${plan.count > 1 ? ` (video 1 of ${plan.count})` : ""}. Nothing is generated until you click Generate.`;
-  await insertAssistant(workspace.id, userId, lead, { kind: "plan", plan });
-}
-
-function planSystem(): string {
-  return "You write a short UGC video plan. Do not publish the video. Do not add a watermark or logo. Reply in plain sentences.";
-}
-
-function planUser(plan: VideoPlan): string {
-  return `Topic: ${plan.topic}\nBrand: ${plan.scenes.map((scene) => scene.line).join(" ")}`;
+  await ctx.reply(FALLBACK, { kind: "note" });
 }
 
 export async function generateFromMessage(input: {
