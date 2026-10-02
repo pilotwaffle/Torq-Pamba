@@ -1,15 +1,15 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { z } from "zod";
 import { requireWorkspace } from "@/lib/auth/guards";
-import { generateFromMessage, handleUserMessage, tierFromForm } from "@/lib/agent/run";
+import { createConversation } from "@/lib/agent/conversation";
+import { generateFromMessage, tierFromForm } from "@/lib/agent/run";
 
-export async function sendMessageAction(formData: FormData) {
+export async function newConversationAction() {
   const { user, workspace } = await requireWorkspace();
-  const text = String(formData.get("message") ?? "");
-  if (!text.trim()) redirect("/app/chat?error=Write%20a%20message");
-  await handleUserMessage({ workspace, userId: user.id, text });
-  redirect("/app/chat");
+  const conversation = await createConversation(workspace.id, user.id);
+  redirect(`/app/chat?c=${conversation.id}`);
 }
 
 export async function generateAction(
@@ -26,5 +26,6 @@ export async function generateAction(
     hookIndex: Number.isInteger(hook) && hook >= 0 && hook <= 2 ? hook : 0,
   });
   if (!result.ok) return { error: result.error };
-  redirect("/app/chat");
+  const conversationId = String(formData.get("conversationId") ?? "");
+  redirect(z.uuid().safeParse(conversationId).success ? `/app/chat?c=${conversationId}` : "/app/chat");
 }

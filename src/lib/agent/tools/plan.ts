@@ -1,7 +1,6 @@
 import { z } from "zod";
-import { buildPlan, type VideoPlan } from "@/lib/agent/plan";
+import { buildPlan } from "@/lib/agent/plan";
 import { listWorkspaceAvatars } from "@/lib/avatars/store";
-import { completeLive } from "@/lib/providers/llm";
 import { defineTool } from "./types";
 
 const DURATION = String.raw`(\d+)\s*(?:s|sec|secs|seconds?)\b`;
@@ -29,10 +28,7 @@ export const planTool = defineTool({
       brief: ctx.workspace.brief,
       avatar: avatar ? { id: avatar.id, name: avatar.name, look: avatar.look } : null,
     });
-    const live = await completeLive(planSystem(), planUser(plan)).catch(() => null);
-    const lead =
-      live?.trim() ||
-      `Here’s a ${plan.durationS}s plan${plan.count > 1 ? ` (video 1 of ${plan.count})` : ""}. Nothing is generated until you click Generate.`;
+    const lead = `Here’s a ${plan.durationS}s plan${plan.count > 1 ? ` (video 1 of ${plan.count})` : ""}. Nothing is generated until you click Generate.`;
     await ctx.reply(lead, { kind: "plan", plan });
   },
 });
@@ -67,12 +63,4 @@ function parseMake(text: string): z.input<typeof parameters> | null {
     durationS: Math.min(60, Math.max(1, Math.round(durationS))),
     topic,
   };
-}
-
-function planSystem(): string {
-  return "You write a short UGC video plan. Do not publish the video. Do not add a watermark or logo. Reply in plain sentences.";
-}
-
-function planUser(plan: VideoPlan): string {
-  return `Topic: ${plan.topic}\nBrand: ${plan.scenes.map((scene) => scene.line).join(" ")}`;
 }

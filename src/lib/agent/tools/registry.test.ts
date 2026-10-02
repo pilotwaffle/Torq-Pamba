@@ -31,7 +31,12 @@ function context(): ChatToolContext & { replies: string[] } {
 
 describe("chat tool registry", () => {
   it("ships plan, schedule and list-schedule in priority order", () => {
-    expect(chatTools.tools.map((tool) => tool.name)).toEqual(["list-schedule", "schedule", "plan"]);
+    const core = new Set(["list-schedule", "schedule", "plan"]);
+    expect(chatTools.tools.map((tool) => tool.name).filter((name) => core.has(name))).toEqual([
+      "list-schedule",
+      "schedule",
+      "plan",
+    ]);
   });
 
   it("plugs in a new tool without touching the others", async () => {

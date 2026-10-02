@@ -190,6 +190,7 @@ Every variable in `.env.example`. Empty means the default in the last column. Do
 | `ALLOW_LOCAL_ONBOARDING` | No | empty | Set to `1` to allow onboarding fetches of private or local IPs in production. Those fetches are already allowed when `NODE_ENV` is not `production` |
 | `GEMINI_API_KEY` | No | empty | Google Gemini API for Omni Flash, Veo 3.1, Gemini 3.8 Flash extraction, and Gemini chat. Used only when `PROVIDER_MODE=live` |
 | `ANTHROPIC_API_KEY` | No | empty | Claude Sonnet 5 for live chat. Live chat tries this key, then `XAI_API_KEY` (Grok 4.7), then `GEMINI_API_KEY` |
+| `CHAT_AGENT_MODEL` | No | `claude-opus-5-5` | Claude model id for the tool-calling chat agent. The agent runs on Claude when `PROVIDER_MODE=live` and `ANTHROPIC_API_KEY` is set; otherwise chat uses the keyless command matcher |
 | `RUNWAY_API_KEY` | No | empty | Runway, Seedance 2.0. Used only when `PROVIDER_MODE=live` |
 | `XAI_API_KEY` | No | empty | xAI grok-imagine video and image, and Grok 4.7 chat. Used only when `PROVIDER_MODE=live` |
 | `KLING_ACCESS_KEY` | No | empty | Kling avatar access key. Live calls need this and `KLING_SECRET_KEY` |
