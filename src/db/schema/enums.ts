@@ -95,6 +95,8 @@ export const chargeKind = pgEnum("charge_kind", [
 ]);
 
 export const connectionStatus = pgEnum("connection_status", ["active", "expired", "revoked", "error"]);
+/** Phase 2 publish queue (`publish_jobs`). */
+export const publishJobStatus = pgEnum("publish_job_status", ["queued", "processing", "succeeded", "failed", "canceled"]);
 export const publishStatus = pgEnum("publish_status", ["pending", "submitted", "published", "failed", "canceled"]);
 export const knowledgeKind = pgEnum("knowledge_kind", ["brand_fact", "preference", "learning", "hook_result", "rule"]);
 export const knowledgeSource = pgEnum("knowledge_source", ["user", "agent", "analytics"]);

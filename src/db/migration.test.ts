@@ -86,14 +86,18 @@ async function rows<T>(query: ReturnType<typeof sql>): Promise<T[]> {
 }
 
 describe("migrations", () => {
-  it("adds every v2 table in one migration after 0000_init", async () => {
+  it("adds every v2 table in one migration after 0000_init, with later migrations after it", async () => {
     const { entries } = await journal();
-    expect(entries.map((entry) => entry.tag)).toEqual(["0000_init", "0001_v2_foundation"]);
+    // Ported feature migrations (phase 2+) follow the foundation, numbered in order.
+    expect(entries.slice(0, 2).map((entry) => entry.tag)).toEqual(["0000_init", "0001_v2_foundation"]);
+    entries.forEach((entry, index) => expect(entry.tag.startsWith(String(index).padStart(4, "0") + "_")).toBe(true));
     const init = (await statements("0000_init")).join("\n");
     const v2 = (await statements("0001_v2_foundation")).join("\n");
+    const later = (await Promise.all(entries.slice(2).map((entry) => statements(entry.tag)))).flat().join("\n");
     for (const table of V2_TABLES) {
       expect(init).not.toContain(`CREATE TABLE "${table}"`);
       expect(v2).toContain(`CREATE TABLE "${table}"`);
+      expect(later).not.toContain(`CREATE TABLE "${table}"`);
     }
   });
 

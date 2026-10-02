@@ -45,8 +45,8 @@ const sections: { title: string; paragraphs: string[]; list?: string[] }[] = [
   {
     title: "OAuth token handling",
     paragraphs: [
-      "This phase does not connect TikTok, Instagram, or Facebook, and it does not store OAuth tokens.",
-      "Phase 2, if it ships, will request official OAuth after app review. Tokens would be stored for that workspace, used only to call the platform's official API on your instruction, and deleted when you disconnect the account or the workspace is deleted. We do not sell tokens, and we do not use them to post from devices.",
+      "When you connect TikTok, Instagram, or Facebook, Torq-Pamba stores the OAuth access token (and refresh token when the platform issues one) for that workspace, encrypted with AES-256-GCM. We never ask for or store your password.",
+      "Tokens are used only to call the platform's official API on your instruction: to publish videos you approved and to read post analytics. They are wiped when you disconnect the account or the workspace is deleted. We do not sell tokens, and we do not use them to post from devices.",
     ],
   },
   {

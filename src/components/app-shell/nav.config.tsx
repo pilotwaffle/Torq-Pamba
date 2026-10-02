@@ -112,6 +112,28 @@ export const NAV_ITEMS: readonly NavItem[] = [
     ),
   },
   {
+    href: "/app/accounts",
+    label: "Accounts",
+    order: 750,
+    icon: (
+      <Icon>
+        <circle cx="8" cy="9" r="2.5" />
+        <circle cx="16" cy="9" r="2.5" />
+        <path d="M3.5 18c.8-2.4 2.4-3.5 4.5-3.5s3.7 1.1 4.5 3.5M11.5 18c.8-2.4 2.4-3.5 4.5-3.5s3.7 1.1 4.5 3.5" />
+      </Icon>
+    ),
+  },
+  {
+    href: "/app/analytics",
+    label: "Analytics",
+    order: 800,
+    icon: (
+      <Icon>
+        <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
+      </Icon>
+    ),
+  },
+  {
     href: "/app/billing",
     label: "Billing",
     order: 900,

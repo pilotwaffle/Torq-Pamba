@@ -15,6 +15,13 @@
       "when": 1790911288012,
       "tag": "0001_v2_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790919602302,
+      "tag": "0002_phase2_publish",
+      "breakpoints": true
     }
   ]
 }

@@ -300,7 +300,7 @@ These are enforced in code and covered by tests. Reviewers treat a violation as 
 4. Stripe is test mode only. `sk_live_` keys throw before checkout or webhooks run. With no secret, checkout is a labeled simulation.
 5. Provider adapters call the network only in live mode with a key, and never when `NODE_ENV` is `test`. The default mode is `mock`.
 
-The schedule page states the same limit: publishing arrives in Phase 2 via official TikTok, Instagram, and Facebook APIs after app review, and Torq-Pamba never posts from devices.
+Phase 2 changes rule 1: publishing now exists, but only through the official TikTok Content Posting API, Instagram content publishing and Facebook Page Reels, only from `src/lib/publish/live/`, only with `PUBLISH_MODE=live`, and only to accounts connected with OAuth. A source-scan test pins those endpoints to that folder. Mock publishing is the default. The schedule page says: Torq-Pamba never posts from devices.
 
 ## Out of scope (permanently)
 
@@ -310,9 +310,7 @@ Quoted from the research report, section 4E:
 
 Not in this phase:
 
-- Publishing (Phase 2)
-- Reach engine (Phase 3)
-- Public API and MCP (Phase 4)
+Phases 2-4 are on branch `feat/phase2-plus-on-v2` (ported onto the v2 foundation); see `REPORT.md` for what each phase adds and the go-live checklist.
 
 ## Phase 0
 
@@ -328,7 +326,9 @@ Vercel or Railway is enough for this phase.
 2. Run migrations (`npm run db:migrate`, or `npm run setup` on a machine that has the repo). The server also applies `./drizzle` on first use of `getDb()`.
 3. Set `PROVIDER_MODE=mock` unless you intend to spend vendor credit. Live mode still does not publish.
 4. Use a Stripe test secret only. Never set `sk_live_` in this phase. The billing module refuses it.
-5. Set `CRON_SECRET` and call `POST /api/cron/tick` with `Authorization: Bearer <secret>` on a schedule if you want due items to flip to `due_manual` without someone opening the app. The handler does not publish.
+5. Set `CRON_SECRET` and call `POST /api/cron/tick` with `Authorization: Bearer <secret>` on a schedule. With no secret the endpoint refuses every call (401), unless `ALLOW_INSECURE_LOCAL_ENDPOINTS=1` outside production. The tick moves due items to `due_manual` or, when they have connected targets, runs the publish queue.
+6. Set `STRIPE_WEBHOOK_SECRET` before pointing Stripe at `/api/billing/webhook`. With no secret the webhook refuses every call (401), with the same local-only exception.
+7. Install ffmpeg on the host (or set `FFMPEG_PATH`/`FFPROBE_PATH`) so live clips are stitched into one MP4.
 
 `next.config.ts` marks `@electric-sql/pglite` as a server external package. Every page and route that touches the database sets `export const dynamic = "force-dynamic"`.
 

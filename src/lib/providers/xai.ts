@@ -1,6 +1,6 @@
-import { catalog, type VideoModel } from "@/lib/models";
+import { catalog } from "@/lib/models";
 import { catalogVideoProvider } from "./catalog";
-import { getJson, isLive, pollUntil, postJson } from "./live";
+import { downloadClip, getJson, isLive, pollUntil, postJson, type PollOptions } from "./live";
 import { mockGenerateImage } from "./mock";
 import { defineAdapter, ProviderUnavailableError, type ClipRequest, type ClipResult, type ImageProvider } from "./types";
 
@@ -20,7 +20,31 @@ export function buildGrokImageRequest(prompt: string) {
   return { model: "grok-imagine-image", prompt, n: 1, response_format: "url" };
 }
 
-async function liveVideo(req: ClipRequest, model: VideoModel): Promise<ClipResult> {
+type GrokVideoStatus = {
+  status?: string;
+  url?: string;
+  video?: { url?: string };
+  data?: { url?: string }[];
+  error?: string | { message?: string };
+};
+
+/** Grok Imagine video job status. Response shape is unverified; accepts the known variants. */
+export function grokVideoResult(status: GrokVideoStatus): string | null {
+  const state = (status.status ?? "").toLowerCase();
+  if (state === "failed" || state === "error" || state === "expired") {
+    const message = typeof status.error === "string" ? status.error : status.error?.message ?? state;
+    throw new ProviderUnavailableError("grok-imagine-video", message);
+  }
+  const url = status.video?.url ?? status.url ?? status.data?.[0]?.url;
+  if (state === "done" || state === "succeeded" || state === "completed") {
+    if (!url) throw new ProviderUnavailableError("grok-imagine-video", "job finished without a video");
+    return url;
+  }
+  return null;
+}
+
+export async function liveGrokVideo(req: ClipRequest, poll?: PollOptions): Promise<ClipResult> {
+  const model = catalog.video("grok-imagine-video");
   const headers = { authorization: `Bearer ${process.env.XAI_API_KEY?.trim() ?? ""}` };
   const created = (await postJson(
     "grok-imagine-video",
@@ -30,21 +54,26 @@ async function liveVideo(req: ClipRequest, model: VideoModel): Promise<ClipResul
   )) as { id?: string; request_id?: string };
   const jobId = created.id ?? created.request_id;
   if (!jobId) throw new ProviderUnavailableError("grok-imagine-video", "missing job");
-  await pollUntil("grok-imagine-video", async () => {
-    const status = (await getJson("grok-imagine-video", `${ROOT}/videos/generations/${jobId}`, headers)) as {
-      status?: string;
-    };
-    return status.status === "done" || status.status === "succeeded" ? "done" : "pending";
-  });
+  const url = await pollUntil(
+    "grok-imagine-video",
+    async () =>
+      grokVideoResult((await getJson("grok-imagine-video", `${ROOT}/videos/generations/${jobId}`, headers)) as GrokVideoStatus),
+    poll,
+  );
+  const mediaKey = await downloadClip("grok-imagine-video", url);
   return {
     providerId: "grok-imagine-video",
     durationS: req.durationS,
     frameUrls: [],
+    mediaKey,
     costUsd: model.usdPerSecond * req.durationS,
   };
 }
 
-export const grokImagineVideo = catalogVideoProvider("grok-imagine-video", { envKeys: ["XAI_API_KEY"], live: liveVideo });
+export const grokImagineVideo = catalogVideoProvider("grok-imagine-video", {
+  envKeys: ["XAI_API_KEY"],
+  live: (req) => liveGrokVideo(req),
+});
 
 const imageModel = catalog.image("grok-imagine-image");
 const GROK_IMAGINE_IMAGE_USD = imageModel.usdPerImage;

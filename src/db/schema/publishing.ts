@@ -12,7 +12,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { scheduleItems, users, videos, workspaces } from "./core";
-import { connectionStatus, publishStatus, socialPlatform } from "./enums";
+import { connectionStatus, publishJobStatus, publishStatus, socialPlatform } from "./enums";
 import { videoRenders } from "./media";
 
 // Wave 2: official-API publishing only (TikTok Content Posting, Instagram
@@ -111,4 +111,108 @@ export const postAnalyticsSnapshots = pgTable(
     index("post_analytics_attempt_idx").on(table.publishAttemptId, table.capturedAt),
     index("post_analytics_workspace_idx").on(table.workspaceId, table.capturedAt),
   ],
+);
+
+// ---------------------------------------------------------------------------
+// Phase 2 publishing (ported from feat/phase2-plus). These tables back the
+// implemented TikTok / Instagram / Facebook publish queue. They predate the
+// wave-0 placeholders above (publishing_connections, publish_attempts,
+// post_analytics_snapshots), which stay untouched; consolidating the two is an
+// owner decision recorded in REPORT.md.
+// ---------------------------------------------------------------------------
+
+/** Phase 2 publishes to these three only; the shared enum also reserves `youtube`. */
+type PhasePlatform = "tiktok" | "instagram" | "facebook";
+
+export const socialAccounts = pgTable(
+  "social_accounts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    platform: socialPlatform("platform").$type<PhasePlatform>().notNull(),
+    externalId: text("external_id").notNull(),
+    handle: text("handle").notNull(),
+    /** "mock" accounts never reach a platform. "live" accounts came from official OAuth. */
+    mode: text("mode").notNull().default("mock"),
+    accessTokenEnc: text("access_token_enc").notNull(),
+    refreshTokenEnc: text("refresh_token_enc"),
+    scopes: text("scopes").notNull().default(""),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    connectedBy: uuid("connected_by").references(() => users.id, { onDelete: "set null" }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("social_accounts_workspace_idx").on(table.workspaceId)],
+);
+
+export const publishJobs = pgTable(
+  "publish_jobs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    videoId: uuid("video_id")
+      .notNull()
+      .references(() => videos.id, { onDelete: "cascade" }),
+    scheduleItemId: uuid("schedule_item_id").references(() => scheduleItems.id, { onDelete: "set null" }),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => socialAccounts.id, { onDelete: "cascade" }),
+    platform: socialPlatform("platform").$type<PhasePlatform>().notNull(),
+    mode: text("mode").notNull(),
+    status: publishJobStatus("status").notNull().default("queued"),
+    privacy: text("privacy").notNull().default(""),
+    externalId: text("external_id"),
+    attempts: integer("attempts").notNull().default(0),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("publish_jobs_status_idx").on(table.status),
+    index("publish_jobs_workspace_idx").on(table.workspaceId, table.createdAt),
+  ],
+);
+
+/** Append-only publish status log, one row per state change or platform status poll. */
+export const publishEvents = pgTable(
+  "publish_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    jobId: uuid("job_id")
+      .notNull()
+      .references(() => publishJobs.id, { onDelete: "cascade" }),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    status: text("status").notNull(),
+    detail: jsonb("detail").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("publish_events_job_idx").on(table.jobId, table.createdAt)],
+);
+
+export const postMetrics = pgTable(
+  "post_metrics",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    jobId: uuid("job_id")
+      .notNull()
+      .references(() => publishJobs.id, { onDelete: "cascade" }),
+    platform: socialPlatform("platform").$type<PhasePlatform>().notNull(),
+    views: integer("views").notNull().default(0),
+    likes: integer("likes").notNull().default(0),
+    comments: integer("comments").notNull().default(0),
+    shares: integer("shares").notNull().default(0),
+    saves: integer("saves").notNull().default(0),
+    reach: integer("reach").notNull().default(0),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("post_metrics_job_idx").on(table.jobId, table.fetchedAt)],
 );

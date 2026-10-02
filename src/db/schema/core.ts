@@ -37,6 +37,13 @@ export type BrandBrief = {
   websiteUrl?: string;
 };
 
+/** One official-API destination chosen when a video is scheduled. */
+export type PublishTarget = {
+  accountId: string;
+  /** tiktok: direct | draft. instagram: reel | trial_reel. facebook: reel. */
+  mode: string;
+};
+
 export type AvatarScene = {
   name?: string;
   startFrame?: string;
@@ -211,6 +218,8 @@ export const videos = pgTable(
     costActualUsd: money("cost_actual_usd"),
     aiGenerated: boolean("ai_generated").notNull().default(true),
     manifest: jsonb("manifest").$type<Record<string, unknown>>(),
+    /** Storage key of the stitched MP4, when live providers returned real clips. */
+    mediaKey: text("media_key"),
     approval: jsonb("approval").$type<Record<string, unknown>>(),
     /** The stitched mp4 shown and published for this video. */
     currentRenderId: uuid("current_render_id").references((): AnyPgColumn => videoRenders.id, {
@@ -256,6 +265,7 @@ export const scheduleItems = pgTable(
       .references(() => videos.id, { onDelete: "cascade" }),
     scheduledAt: timestamp("scheduled_at", { withTimezone: true }).notNull(),
     status: scheduleStatus("status").notNull().default("scheduled"),
+    targets: jsonb("targets").$type<PublishTarget[]>().notNull().default([]),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

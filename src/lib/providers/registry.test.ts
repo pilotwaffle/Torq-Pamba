@@ -38,8 +38,8 @@ describe("provider registry", () => {
   });
 
   it("keeps the image and chat providers", () => {
-    expect(imageProviders.map((provider) => provider.id)).toEqual(["grok-imagine-image"]);
-    expect(imageProviders[0]?.pricePerImageUsd).toBe(catalog.image("grok-imagine-image").usdPerImage);
+    expect(imageProviders.map((provider) => provider.id)).toEqual(["nano-banana-2", "nano-banana-pro", "grok-imagine-image"]);
+    for (const provider of imageProviders) expect(provider.pricePerImageUsd).toBe(catalog.image(provider.id).usdPerImage);
     expect(llmProviders.map((provider) => provider.id).sort()).toEqual([
       "claude-sonnet-5",
       "gemini-3.8-flash",

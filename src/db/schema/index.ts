@@ -16,7 +16,7 @@ import type { chatToolCalls, conversations } from "./chat";
 import type { creditCharges, creditLedger, creditTopUps, plans } from "./credits";
 import type { sceneTakes, videoCaptions, videoHooks, videoScenes } from "./editor";
 import type { generationJobs, mediaAssets, videoRenders } from "./media";
-import type { postAnalyticsSnapshots, publishAttempts, publishingConnections } from "./publishing";
+import type { postAnalyticsSnapshots, postMetrics, publishAttempts, publishJobs, publishingConnections, socialAccounts } from "./publishing";
 import type { ideas, inspirationAccounts, trends, viralPosts } from "./research";
 import type { voiceClones, voices } from "./voices";
 
@@ -44,3 +44,6 @@ export type PublishAttempt = typeof publishAttempts.$inferSelect;
 export type PostAnalyticsSnapshot = typeof postAnalyticsSnapshots.$inferSelect;
 export type KnowledgeItem = typeof knowledgeItems.$inferSelect;
 export type ApiKey = typeof apiKeys.$inferSelect;
+export type SocialAccount = typeof socialAccounts.$inferSelect;
+export type PublishJob = typeof publishJobs.$inferSelect;
+export type PostMetric = typeof postMetrics.$inferSelect;

@@ -69,15 +69,21 @@ The status enum also includes `draft` and `planned`. The chat path inserts the r
 
 1. The browser loads a server component. `requireWorkspace` reads `tp_session` and the membership.
 2. A form posts to a server action. The action checks the session, calls a `src/lib` function, and redirects or returns a small result.
-3. Onboarding: `fetchSite` downloads HTML, `getBrandExtractor` pulls company, products, audience, tone, logo, and images, each with the snippet it came from. The user edits and saves the brief, confirms rights on each asset, and picks an avatar. Step 5 of onboarding is a note that official account connection is Phase 2. The step number is stored on the workspace.
+3. Onboarding: `fetchSite` downloads HTML, `getBrandExtractor` pulls company, products, audience, tone, logo, and images, each with the snippet it came from. The user edits and saves the brief, confirms rights on each asset, and picks an avatar. Step 5 of onboarding links to `/app/accounts`, where official accounts are connected. The step number is stored on the workspace.
 4. Chat: `handleUserMessage` parses the text. A video request stores a plan and an itemized `estimateClipCost` (script, frames, video, voice, total). Nothing is generated until `generateFromMessage` runs from the Generate button.
 5. Generate: `generateVideo` compares the estimate with the remaining monthly budget, inserts a `generating` row, and runs the three scenes with `Promise.all` through `FALLBACK_CHAIN` for the chosen tier. Each attempt is inserted. On full success the router writes a stitched manifest (ordered scenes, duration, caption track, hook) and `cost_actual_usd`. On failure the video is `failed` and the cost stays 0.
 6. Approval: `canApprove` requires a privacy value, music consent, and schedule consent. Commercial disclosure requires a type. Clearing the AI label requires `confirmAiOff`. `approveVideo` writes the approval JSON and the audit row.
-7. Schedule: the user picks a datetime or the next 09:00 / 12:00 / 18:00. Only an approved video can be queued. `POST /api/cron/tick` (Bearer `CRON_SECRET`) calls `processDueItems`, which sets due rows to `due_manual`.
+7. Schedule: the user picks a datetime or the next 09:00 / 12:00 / 18:00. Only an approved video can be queued. `POST /api/cron/tick` requires Bearer `CRON_SECRET` (fail-closed rules below). It calls `processDueItems`: rows without targets become `due_manual`; rows with connected-account targets become `publishing` and enqueue `publish_jobs`, which `processPublishQueue` runs through `src/lib/publish/dispatch.ts` (mock publisher by default, official APIs under `src/lib/publish/live/` only with `PUBLISH_MODE=live`).
 
 Stripe checkout is `POST /api/billing/checkout`. It creates a test-mode Checkout Session when `STRIPE_SECRET_KEY` is an `sk_test_` key and the price id is set. Otherwise it marks the workspace plan in the database and tells the UI the upgrade was simulated. `POST /api/billing/webhook` verifies the signature with `STRIPE_WEBHOOK_SECRET`.
 
 Both machine endpoints fail closed. With `CRON_SECRET` or `STRIPE_WEBHOOK_SECRET` unset they return 401, unless `ALLOW_INSECURE_LOCAL_ENDPOINTS=1` and `NODE_ENV` is not `production` (`src/lib/local-mode.ts`).
+
+## Phase 2 additions
+
+- Live adapters (`src/lib/providers/*`) submit, then `pollUntil` the vendor job with backoff (`PROVIDER_POLL_TIMEOUT_MS`, default 10 minutes), then `downloadClip` (https, `video/*`, size-capped) into `src/lib/media/storage.ts` (`MEDIA_DIR`). When every scene has media, `stitchClips` (ffmpeg) concatenates them at 720x1280/30fps with burned SRT captions and stores `videos.media_key`. `/api/media/<key>` serves files by unguessable key so platforms can pull them (`PUBLIC_BASE_URL`).
+- `social_accounts` (encrypted tokens), `publish_jobs`, `publish_events`, `post_metrics`, in `src/db/schema/publishing.ts` next to the wave-0 placeholder tables (`publishing_connections`, `publish_attempts`, `post_analytics_snapshots`), which phase 2 does not use yet. OAuth for TikTok, Instagram and Facebook uses signed state and PKCE (`src/lib/publish/oauth.ts`).
+- `src/lib/analytics` stores metric snapshots per posted job.
 
 The monthly budget sums `generation_attempts.cost_usd` for rows with status `ok` since the start of the month in the workspace timezone.
 
