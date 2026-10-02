@@ -3,7 +3,7 @@ import { buildPlan, planCost } from "@/lib/agent/plan";
 import { workspaceAnalytics } from "@/lib/analytics";
 import { listWorkspaceAvatars } from "@/lib/avatars/store";
 import { remainingBudgetUsd } from "@/lib/budget";
-import { estimateClipCost, roundCents, type Tier } from "@/lib/pricing";
+import { estimateClipCost, type Tier } from "@/lib/pricing";
 import { listPublishJobs } from "@/lib/publish/queue";
 import { listTiles, originOf, provenHooks } from "@/lib/reach/knowledge";
 import { workspaceById } from "@/lib/reach/experiments";

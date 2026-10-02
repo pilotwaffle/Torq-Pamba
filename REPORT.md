@@ -6,7 +6,7 @@
 
 **Publishing criterion.** Reversing the V2 no-publish criterion (CONTRIBUTING.md criterion 1 and README rule 1, narrowed in `7d62583`) needs Barry's explicit, named yes before any push or merge of this branch.
 
-Nothing was pushed (the push URL is `DISABLED`). No PR, merge, tag or deploy was made. Boris's branches, worktrees and bundles were not modified. Mock mode is the default. No secrets are in the tree.
+This branch was pushed by Stan as draft PR #3 into `feat/v2-foundation`; PR #2 (`feat/phase2-plus` at `57a17eb`) was closed unmerged. I pushed nothing from this clone (the push URL is `DISABLED`), and made no merge to any remote branch, tag or deploy. Boris's branches, worktrees and bundles were not modified. Mock mode is the default. No secrets are in the tree.
 
 | Commit | What | Unit (Vitest) | e2e (Playwright) |
 | --- | --- | --- | --- |
