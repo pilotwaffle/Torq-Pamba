@@ -149,7 +149,7 @@ A shorter module map, and how to add a feature through the extension points, is 
 
 ## Quickstart
 
-Use Node 24. That is the version CI installs. `package.json` allows Node 22 or newer.
+Use Node 24. That is the version CI installs. `package.json` allows Node 22 or newer. Install `ffmpeg` (with `ffprobe`): mock clips and every final MP4 are encoded with it.
 
 ```bash
 npm install
@@ -177,6 +177,7 @@ Open [http://localhost:3000](http://localhost:3000), create an account, and onbo
 | `npm run db:generate` | `drizzle-kit generate` into `./drizzle` |
 | `npm run db:migrate` | Apply `./drizzle` (PGlite, or Postgres when `DATABASE_URL` is set) |
 | `npm run setup` | Copy `.env.example` to `.env.local` if needed, then migrate |
+| `npm run worker` | Poll generation jobs (clip submit/poll/download, final render) outside any request. `POST /api/cron/tick` does the same work once per tick |
 
 ## Environment variables
 
@@ -207,6 +208,23 @@ Every variable in `.env.example`. Empty means the default in the last column. Do
 | `YOUTUBE_API_KEY` | No | empty | YouTube Data API v3 key for research (official API, public channels and Shorts). Used only when `PROVIDER_MODE=live` |
 | `SCRAPECREATORS_API_KEY` | No | empty | ScrapeCreators key for research on public TikTok and Instagram posts. Used only when `PROVIDER_MODE=live` |
 | `APIFY_TOKEN` | No | empty | Apify token for research through the TikTok Scraper actor (public posts). Used only when `PROVIDER_MODE=live` |
+| `KLING_API_KEY` | No | empty | Kling API key, the current auth scheme. When set it is used instead of the access/secret pair |
+| `HEYGEN_VOICE_ID` | No | empty | HeyGen voice for script-driven avatar videos when no voice track is supplied |
+| `MEDIA_STORAGE` | No | `local` | Where clips and final MP4s are stored: `local` or `s3` (AWS S3 or Cloudflare R2) |
+| `MEDIA_LOCAL_DIR` | No | `./.data/media` | Directory for the `local` driver. Unit tests use the OS temp dir |
+| `MEDIA_S3_BUCKET` | With `s3` | empty | Bucket name |
+| `MEDIA_S3_REGION` | No | `us-east-1`, or `auto` with an endpoint | Signing region |
+| `MEDIA_S3_ENDPOINT` | No | empty | Custom endpoint such as `https://<account>.r2.cloudflarestorage.com`. Empty for AWS S3 |
+| `MEDIA_S3_ACCESS_KEY_ID` | With `s3` | empty | Access key id |
+| `MEDIA_S3_SECRET_ACCESS_KEY` | With `s3` | empty | Secret access key |
+| `MEDIA_S3_FORCE_PATH_STYLE` | No | path-style with an endpoint | `1` for path-style URLs, `0` for virtual-hosted |
+| `MEDIA_S3_PUBLIC_BASE_URL` | No | empty | Public base URL (CDN or R2 public bucket). Otherwise media is served through short-lived presigned URLs |
+| `FFMPEG_PATH` | No | `ffmpeg` | ffmpeg binary for mock clips and the final render |
+| `FFPROBE_PATH` | No | `ffprobe` | ffprobe binary for media metadata |
+| `FFMPEG_FONT_FILE` | No | a system font | Font for burned-in captions. Without a usable font, captions ship as a WebVTT track instead |
+| `VIDEO_INLINE_WAIT_MS` | No | `45000` | How long Generate drives the job queue before returning "still generating" |
+| `VIDEO_JOB_TIMEOUT_MS` | No | `1200000` | How long one provider clip job may run before the fallback chain moves on |
+| `WORKER_INTERVAL_MS` | No | `2000` | Pause between passes of `npm run worker` |
 
 `npm run capture` sets `CAPTURE=1` itself. That variable is not part of app configuration.
 

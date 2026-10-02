@@ -1,48 +1,73 @@
-import type { VideoModel } from "@/lib/models";
 import { catalogVideoProvider } from "./catalog";
-import { getJson, pollUntil, postJson } from "./live";
-import { defineAdapter, ProviderUnavailableError, type ClipRequest, type ClipResult } from "./types";
+import { getJson, postJson } from "./live";
+import { defineAdapter, ProviderUnavailableError, type ClipPoll, type ClipRequest } from "./types";
 
 const ROOT = "https://api.heygen.com";
+const ID = "heygen-avatar-iv";
 
-export function buildHeygenRequest(req: ClipRequest) {
+function headers() {
+  return { "x-api-key": process.env.HEYGEN_API_KEY?.trim() ?? "" };
+}
+
+/**
+ * POST /v3/videos with `type: "image"` animates a photo (Avatar IV is the
+ * default engine). Speech is `script` + `voice_id`, or `audio_url`, never both.
+ * v2 `/v2/video/generate` and `/v1/video_status.get` are retired.
+ * https://developers.heygen.com/reference/create-video and https://developers.heygen.com/image-to-video (read 2026-10-01).
+ */
+export function buildHeygenRequest(req: ClipRequest, voiceId = process.env.HEYGEN_VOICE_ID?.trim() ?? "") {
+  if (!req.imageUrl?.startsWith("https://")) throw new ProviderUnavailableError(ID, "HeyGen needs an https portrait URL");
+  const speech = req.audioUrl
+    ? { audio_url: req.audioUrl }
+    : voiceId
+      ? { script: req.prompt.slice(0, 1500), voice_id: voiceId }
+      : null;
+  if (!speech) throw new ProviderUnavailableError(ID, "HeyGen needs a voice track or HEYGEN_VOICE_ID");
   return {
-    video_inputs: [
-      {
-        character: { type: "talking_photo", talking_photo_id: req.imageUrl ?? "" },
-        voice: { type: "text", input_text: req.prompt.slice(0, 1500) },
-      },
-    ],
-    dimension: { width: 720, height: 1280 },
+    type: "image",
+    image: { type: "url", url: req.imageUrl },
+    ...speech,
+    aspect_ratio: "9:16",
     title: req.prompt.slice(0, 80),
   };
 }
 
-async function liveClip(req: ClipRequest, model: VideoModel): Promise<ClipResult> {
-  const headers = { "x-api-key": process.env.HEYGEN_API_KEY?.trim() ?? "" };
-  const created = (await postJson("heygen-avatar-iv", `${ROOT}/v2/video/generate`, buildHeygenRequest(req), headers)) as {
-    data?: { video_id?: string };
-  };
-  const videoId = created.data?.video_id;
-  if (!videoId) throw new ProviderUnavailableError("heygen-avatar-iv", "missing video");
-  await pollUntil("heygen-avatar-iv", async () => {
-    const status = (await getJson(
-      "heygen-avatar-iv",
-      `${ROOT}/v1/video_status.get?video_id=${encodeURIComponent(videoId)}`,
-      headers,
-    )) as { data?: { status?: string } };
-    const state = status.data?.status;
-    if (state === "failed") throw new ProviderUnavailableError("heygen-avatar-iv", "failed");
-    return state === "completed" ? "done" : "pending";
-  });
-  return {
-    providerId: "heygen-avatar-iv",
-    durationS: req.durationS,
-    frameUrls: [],
-    costUsd: model.usdPerSecond * req.durationS,
-  };
+type HeygenVideo = { status?: string; video_url?: string | null; failure_code?: string | null; failure_message?: string | null };
+
+/**
+ * GET /v3/videos/{video_id}: `status` is pending | processing | completed |
+ * failed, with a presigned `video_url` when completed.
+ * https://developers.heygen.com/reference/get-video (read 2026-10-01).
+ */
+export function readHeygenVideo(body: HeygenVideo | { data?: HeygenVideo }): ClipPoll {
+  const video: HeygenVideo = "data" in body && body.data ? body.data : (body as HeygenVideo);
+  if (video.status === "completed") {
+    if (!video.video_url) return { state: "failed", refused: false, message: "Completed without a video_url" };
+    return { state: "succeeded", output: { kind: "url", url: video.video_url, mimeType: "video/mp4" } };
+  }
+  if (video.status === "failed") {
+    const message = [video.failure_code, video.failure_message].filter(Boolean).join(": ") || "failed";
+    return { state: "failed", refused: /moderat|safety|policy|violat/i.test(message), message };
+  }
+  return { state: "pending" };
 }
 
-export const heygenAvatar = catalogVideoProvider("heygen-avatar-iv", { envKeys: ["HEYGEN_API_KEY"], live: liveClip });
+export const heygenAvatar = catalogVideoProvider(ID, {
+  envKeys: ["HEYGEN_API_KEY"],
+  live: {
+    async submit(req) {
+      const created = (await postJson(ID, `${ROOT}/v3/videos`, buildHeygenRequest(req), headers())) as {
+        data?: { video_id?: string };
+      };
+      const videoId = created.data?.video_id;
+      if (!videoId) throw new ProviderUnavailableError(ID, "missing video_id");
+      return { providerJobId: videoId };
+    },
+    async poll(providerJobId) {
+      const body = await getJson(ID, `${ROOT}/v3/videos/${encodeURIComponent(providerJobId)}`, headers());
+      return readHeygenVideo(body as HeygenVideo);
+    },
+  },
+});
 
 export const adapter = defineAdapter({ id: "heygen", video: [heygenAvatar] });

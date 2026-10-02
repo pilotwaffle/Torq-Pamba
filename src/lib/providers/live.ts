@@ -21,7 +21,7 @@ export async function postJson(
       signal: AbortSignal.timeout(20_000),
     });
   } catch (error) {
-    throw new ProviderUnavailableError(providerId, error instanceof Error ? error.message : "network");
+    throw new ProviderUnavailableError(providerId, error instanceof Error ? error.message : "network", { retryable: true });
   }
   return readBody(providerId, response);
 }
@@ -31,11 +31,15 @@ export async function getJson(providerId: string, url: string, headers: Record<s
   try {
     response = await fetch(url, { headers, signal: AbortSignal.timeout(20_000) });
   } catch (error) {
-    throw new ProviderUnavailableError(providerId, error instanceof Error ? error.message : "network");
+    throw new ProviderUnavailableError(providerId, error instanceof Error ? error.message : "network", { retryable: true });
   }
   return readBody(providerId, response);
 }
 
+/**
+ * 400 / 422 and safety wording are refusals (the chain moves on). 408, 429 and
+ * 5xx are retryable. Anything else (401, 403, 404) is a permanent failure.
+ */
 async function readBody(providerId: string, response: Response): Promise<unknown> {
   const text = await response.text();
   let json: unknown = null;
@@ -48,21 +52,26 @@ async function readBody(providerId: string, response: Response): Promise<unknown
   }
   if (!response.ok) {
     const message = text.slice(0, 300);
-    if (response.status === 400 || response.status === 422 || /safety|refus|blocked/i.test(message)) {
+    if (response.status === 400 || response.status === 422 || /safety|refus|blocked|moderation/i.test(message)) {
       throw new ProviderRefusedError(providerId, message || "Provider refused the prompt");
     }
-    throw new ProviderUnavailableError(providerId, message || `HTTP ${response.status}`);
+    const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+    throw new ProviderUnavailableError(providerId, message || `HTTP ${response.status}`, { retryable });
   }
   return json;
 }
 
-export async function pollUntil(
-  providerId: string,
-  check: () => Promise<"pending" | "done">,
-): Promise<void> {
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    if ((await check()) === "done") return;
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+/** Nearest allowed value, preferring the larger one on a tie; the stitcher trims or pads to the scene length. */
+export function nearestDuration(target: number, allowed: readonly number[]): number {
+  let best = allowed[0] ?? target;
+  for (const value of allowed) {
+    if (Math.abs(value - target) < Math.abs(best - target) || (Math.abs(value - target) === Math.abs(best - target) && value > best)) {
+      best = value;
+    }
   }
-  throw new ProviderUnavailableError(providerId, "timed out");
+  return best;
+}
+
+export function clampDuration(target: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Math.round(target)));
 }

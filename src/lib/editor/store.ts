@@ -2,6 +2,7 @@ import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
   chatMessages,
+  generationJobs,
   mediaAssets,
   sceneTakes,
   videoCaptions,
@@ -11,6 +12,8 @@ import {
 } from "@/db/schema";
 import { isVideoPlan } from "@/lib/agent/plan";
 import { writeAudit } from "@/lib/audit";
+import { clipRequestOf } from "@/lib/jobs/clips";
+import { queueRender } from "@/lib/jobs/render";
 import { parseManifest } from "@/lib/router";
 import { getWorkspaceVideo } from "@/lib/videos";
 import {
@@ -76,6 +79,16 @@ export async function ensureEditor(video: Video): Promise<void> {
   const assetIds = await Promise.all(
     manifest.scenes.map((scene) => storeTakeAsset({ workspaceId: video.workspaceId, url: scene.frameUrl })),
   );
+  // Take 1 of each scene is the clip job that won during Generate, so the render can use the selected takes.
+  const clipJobs = await db
+    .select()
+    .from(generationJobs)
+    .where(
+      and(eq(generationJobs.videoId, video.id), eq(generationJobs.kind, "clip"), eq(generationJobs.status, "succeeded")),
+    );
+  const firstClips = new Map(
+    clipJobs.filter((job) => job.outputAssetId).map((job) => [clipRequestOf(job).sceneIndex, job] as const),
+  );
 
   await db.transaction(async (tx) => {
     const inserted = await tx
@@ -108,6 +121,8 @@ export async function ensureEditor(video: Video): Promise<void> {
           model: scene.model || null,
           prompt: `${video.prompt}\n${scene.visual}`.trim(),
           posterAssetId: assetIds[index] ?? null,
+          clipAssetId: firstClips.get(index)?.outputAssetId ?? null,
+          jobId: firstClips.get(index)?.id ?? null,
           durationMs: Math.round(scene.durationS * 1000),
         })
         .returning({ id: sceneTakes.id });
@@ -258,7 +273,7 @@ export async function requireEditable(workspaceId: string, videoId: string): Pro
   return { video, state: await readEditor(video) };
 }
 
-/** Writes the edited scenes, captions and hook back into `videos.manifest`. */
+/** Writes the edited scenes, captions and hook back into `videos.manifest`, and queues a re-render of the MP4. */
 export async function syncManifest(videoId: string): Promise<void> {
   const db = await getDb();
   const [video] = await db.select().from(videos).where(eq(videos.id, videoId)).limit(1);
@@ -268,6 +283,13 @@ export async function syncManifest(videoId: string): Promise<void> {
   if (state.scenes.length === 0) return;
   const manifest = composeManifest({ ...(video.manifest ?? {}), ...previous }, state);
   await db.update(videos).set({ manifest, updatedAt: new Date() }).where(eq(videos.id, videoId));
+  // A render reads the editor rows when it runs, so one that is still queued already covers this change.
+  const [queued] = await db
+    .select({ id: generationJobs.id })
+    .from(generationJobs)
+    .where(and(eq(generationJobs.videoId, videoId), eq(generationJobs.kind, "render"), eq(generationJobs.status, "queued")))
+    .limit(1);
+  if (!queued) await queueRender(videoId, "edit");
 }
 
 export async function selectTake(input: {
