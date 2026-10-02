@@ -8,6 +8,7 @@ import { completeLive } from "@/lib/providers/llm";
 import type { Tier } from "@/lib/pricing";
 import { BudgetExceededError, generateVideo } from "@/lib/router";
 import { formatWhen, listSchedule, scheduleApprovedVideo, scheduleStatusLabel, tomorrowAt } from "@/lib/schedule";
+import { provenHooks } from "@/lib/reach/knowledge";
 
 const TIERS = new Set<Tier>(["budget", "standard", "premium"]);
 
@@ -77,7 +78,9 @@ async function replyWithPlan(
 ) {
   const avatars = await listWorkspaceAvatars(workspace.id);
   const avatar = avatars.find((item) => item.isDefault) ?? avatars[0] ?? null;
+  const proven = await provenHooks(workspace.id).catch(() => ({ hooks: [] as string[], patterns: [] as string[] }));
   const plan = buildPlan({
+    provenHooks: proven.hooks,
     topic: intent.topic,
     count: intent.count,
     durationS: intent.durationS,

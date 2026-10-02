@@ -49,7 +49,7 @@ export function toTitleCase(value: string): string {
     .join(" ");
 }
 
-function limit(text: string, max = 60): string {
+export function limit(text: string, max = 60): string {
   const clean = text.replace(/\s+/g, " ").trim();
   if (clean.length <= max) return clean;
   const room = clean.slice(0, max);

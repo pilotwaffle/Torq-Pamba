@@ -1,5 +1,5 @@
 import type { BrandBrief } from "@/db/schema";
-import { buildHooks, cleanTopic, normalizePhrase, toTitleCase, ugcScenes } from "@/lib/agent/copy";
+import { buildHooks, cleanTopic, limit, normalizePhrase, toTitleCase, ugcScenes } from "@/lib/agent/copy";
 import { estimateClipCost, type ClipCost, type Tier } from "@/lib/pricing";
 
 export type SceneDraft = {
@@ -38,6 +38,8 @@ export function buildPlan(input: {
   brief?: BrandBrief | null;
   avatar?: { id: string; name: string; look: string } | null;
   tier?: Tier;
+  /** Winning hooks from Knowledge. The best one leads the hook choices. */
+  provenHooks?: string[];
 }): VideoPlan {
   const tier = input.tier ?? "standard";
   const durations = sceneDurations(input.durationS);
@@ -52,7 +54,7 @@ export function buildPlan(input: {
     line,
     durationS: durations[index] ?? 1,
   }));
-  const hooks = buildHooks({ product, audience, company });
+  const hooks = withProvenHook(buildHooks({ product, audience, company }), input.provenHooks ?? []);
   const title = toTitleCase(topic).slice(0, 80) || "Untitled";
   return {
     topic,
@@ -67,6 +69,14 @@ export function buildPlan(input: {
     hooks,
     captions: spoken.lines.join("\n"),
   };
+}
+
+/** Puts the top proven hook first and keeps three distinct hooks of at most 60 characters. */
+export function withProvenHook(defaults: [string, string, string], proven: string[]): [string, string, string] {
+  const lead = proven.map((hook) => limit(hook)).find((hook) => hook.length > 0);
+  if (!lead) return defaults;
+  const rest = defaults.filter((hook) => hook.toLowerCase() !== lead.toLowerCase());
+  return [lead, rest[0] ?? defaults[1], rest[1] ?? defaults[2]];
 }
 
 export function planCost(plan: Pick<VideoPlan, "tier" | "durationS">, tier: Tier = plan.tier): ClipCost {

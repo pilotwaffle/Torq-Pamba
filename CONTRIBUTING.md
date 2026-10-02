@@ -57,6 +57,7 @@ Business rules live in `src/lib` so unit tests can call them without rendering a
 | `src/lib/publish/` | Accounts, OAuth, rules, mock publisher, queue, dispatch. Official endpoints live only in `live/` |
 | `src/lib/media/` | Clip storage and ffmpeg stitching |
 | `src/lib/analytics/` | Post metric snapshots |
+| `src/lib/reach/` | Hook tests, Knowledge tiles, ad hand-offs, creator briefs |
 | `src/lib/billing.ts` | Plans and Stripe test mode |
 | `e2e/` | Playwright journey and capture |
 | `drizzle/` | Committed SQL migrations |

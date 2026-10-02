@@ -13,6 +13,9 @@ const ITEMS = [
   { href: "/app/schedule", label: "Schedule", icon: "schedule" },
   { href: "/app/accounts", label: "Accounts", icon: "accounts" },
   { href: "/app/analytics", label: "Analytics", icon: "analytics" },
+  { href: "/app/reach", label: "Reach", icon: "reach" },
+  { href: "/app/knowledge", label: "Knowledge", icon: "knowledge" },
+  { href: "/app/creators", label: "Creators", icon: "creators" },
   { href: "/app/billing", label: "Billing", icon: "billing" },
   { href: "/app/settings", label: "Settings", icon: "settings" },
 ] as const;
@@ -128,6 +131,28 @@ function NavIcon({ name }: { name: string }) {
     return (
       <svg {...common}>
         <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
+      </svg>
+    );
+  }
+  if (name === "reach") {
+    return (
+      <svg {...common}>
+        <path d="M3 17l6-6 4 4 8-8M15 7h6v6" />
+      </svg>
+    );
+  }
+  if (name === "knowledge") {
+    return (
+      <svg {...common}>
+        <path d="M4 5h7v14H4zM13 5h7v14h-7z" />
+      </svg>
+    );
+  }
+  if (name === "creators") {
+    return (
+      <svg {...common}>
+        <circle cx="12" cy="8" r="3.5" />
+        <path d="M5 20c1-3.5 3.6-5 7-5s6 1.5 7 5" />
       </svg>
     );
   }

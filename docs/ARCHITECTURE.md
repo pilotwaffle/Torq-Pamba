@@ -65,3 +65,11 @@ Stripe checkout is `POST /api/billing/checkout`. It creates a test-mode Checkout
 - `src/lib/analytics` stores metric snapshots per posted job.
 
 The monthly budget sums `generation_attempts.cost_usd` for rows with status `ok` since the start of the month in the workspace timezone.
+
+## Phase 3 additions (reach engine)
+
+- `src/lib/reach/hooks.ts`: hook patterns (question, POV, number, contrarian, social proof, before/after, curiosity), a policy filter for claims platforms reject, and `generateHookVariants` (control A plus re-hooked variants, proven patterns first).
+- `src/lib/reach/experiments.ts`: `hook_experiments` and `hook_variants`. A variant is a new `videos` row that reuses the base clips with a new hook (on screen for the first 2 s), costs $0, and needs approval (the user can apply the base approval to all variants explicitly). Launch enqueues one Instagram `trial_reel` publish job per variant; `pickWinner` ranks by views or engagement once every variant has `min_views`; the decision writes a `knowledge_tiles` row (source `experiment`).
+- `src/lib/reach/knowledge.ts`: Knowledge tiles. `provenHooks` feeds `buildPlan` (the chat plan leads with the best proven hook) and the next hook test.
+- `src/lib/reach/handoff.ts`: `ad_handoffs` for TikTok Spark Ads (sealed authorization code) and Meta partnership ads. No marketing-API calls; a source scan test enforces that.
+- `src/lib/reach/creators.ts`: `creator_briefs` with Markdown (TikTok One) and CSV (Billo / Collabstr) export at `GET /api/reach/briefs/<id>?format=md|csv` (session required).

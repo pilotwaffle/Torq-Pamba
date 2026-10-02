@@ -367,7 +367,7 @@ export async function generateVideo(input: {
  * and return the stored MP4 key. Mock scenes are SVG frames and stay a manifest.
  * A stitch failure keeps the video reviewable and is written to the audit log.
  */
-async function renderIfLive(workspaceId: string, videoId: string, manifest: StitchedManifest): Promise<string | null> {
+export async function renderIfLive(workspaceId: string, videoId: string, manifest: StitchedManifest): Promise<string | null> {
   const keys = manifest.scenes.map((scene) => scene.mediaKey ?? "");
   if (keys.length === 0 || keys.some((key) => !key)) return null;
   try {
